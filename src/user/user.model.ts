@@ -6,7 +6,8 @@ export type UserRole =
   | "DOCTOR"
   | "PHARMACY_STAFF"
   | "DISTRIBUTOR"
-  | "PATIENT";
+  | "PATIENT"
+  | "DELIVERY_AGENT";
 
 export interface IUser extends Document {
   name: string;
@@ -17,7 +18,13 @@ export interface IUser extends Document {
   hospitalId?: string;
   pharmacyId?: string;
   distributorId?: string;
+  status?: "AVAILABLE" | "BUSY" | "OFFLINE";
+  currentOrderId?: string;
   isActive: boolean;
+  // Doctor-specific fields
+  specialization?: string;
+  qualification?: string;
+  serviceCharge?: number;
 }
 
 const UserSchema = new Schema<IUser>(
@@ -28,13 +35,23 @@ const UserSchema = new Schema<IUser>(
     passwordHash: { type: String, required: true },
     role: {
       type: String,
-      enum: ["SUPER_ADMIN", "HOSPITAL_ADMIN", "DOCTOR", "PHARMACY_STAFF", "DISTRIBUTOR", "PATIENT"],
+      enum: ["SUPER_ADMIN", "HOSPITAL_ADMIN", "DOCTOR", "PHARMACY_STAFF", "DISTRIBUTOR", "PATIENT", "DELIVERY_AGENT"],
       required: true,
     },
     hospitalId: { type: String },
     pharmacyId: { type: String },
     distributorId: { type: String },
+    status: {
+      type: String,
+      enum: ["AVAILABLE", "BUSY", "OFFLINE"],
+      default: "AVAILABLE",
+    },
+    currentOrderId: { type: String },
     isActive: { type: Boolean, default: true },
+    // Doctor-specific fields
+    specialization: { type: String },
+    qualification: { type: String },
+    serviceCharge: { type: Number },
   },
   { timestamps: true }
 );

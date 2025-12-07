@@ -53,7 +53,7 @@ router.post(
 // Basic signup for initial testing (Super Admin can later create all users)
 router.post("/signup", async (req, res) => {
   try {
-    const { name, email, password, role, hospitalId, pharmacyId, distributorId } = req.body;
+    const { name, email, password, role, hospitalId, pharmacyId, distributorId, phone, specialization, qualification, serviceCharge } = req.body;
 
     // Validate required fields
     if (!name || !email || !password || !role) {
@@ -75,9 +75,17 @@ router.post("/signup", async (req, res) => {
     };
 
     // Add optional fields if provided
+    if (phone) userData.phone = phone;
     if (hospitalId) userData.hospitalId = hospitalId;
     if (pharmacyId) userData.pharmacyId = pharmacyId;
     if (distributorId) userData.distributorId = distributorId;
+    
+    // Doctor-specific fields
+    if (specialization) userData.specialization = specialization;
+    if (qualification) userData.qualification = qualification;
+    if (serviceCharge !== undefined && serviceCharge !== null && serviceCharge !== "") {
+      userData.serviceCharge = parseFloat(serviceCharge);
+    }
 
     const user = await User.create(userData);
 
@@ -105,6 +113,9 @@ router.post("/signup", async (req, res) => {
     if (user.pharmacyId) userResponse.pharmacyId = user.pharmacyId;
     if (user.distributorId) userResponse.distributorId = user.distributorId;
     if (user.phone) userResponse.phone = user.phone;
+    if (user.specialization) userResponse.specialization = user.specialization;
+    if (user.qualification) userResponse.qualification = user.qualification;
+    if (user.serviceCharge !== undefined) userResponse.serviceCharge = user.serviceCharge;
 
     res.status(201).json(userResponse);
   } catch (error: any) {
@@ -139,14 +150,22 @@ router.post("/login", async (req, res) => {
     // No expiration - token never expires
   );
 
+  const userResponse: any = {
+    id: String(user._id),
+    name: user.name,
+    email: user.email,
+    role: user.role,
+  };
+  
+  // Include IDs if they exist
+  if (user.hospitalId) userResponse.hospitalId = user.hospitalId;
+  if (user.pharmacyId) userResponse.pharmacyId = user.pharmacyId;
+  if (user.distributorId) userResponse.distributorId = user.distributorId;
+  if (user.phone) userResponse.phone = user.phone;
+
   res.json({
     token,
-    user: {
-      id: String(user._id),
-      name: user.name,
-      email: user.email,
-      role: user.role,
-    },
+    user: userResponse,
   });
 });
 
@@ -191,14 +210,27 @@ router.get("/by-role/:role", async (req, res) => {
   res.json(formattedUsers);
 });
 
-// Admin endpoint to get all users
+// Admin endpoint to get all users (with optional role and status filters)
 router.get(
   "/",
   requireAuth,
-  requireRole(["SUPER_ADMIN", "HOSPITAL_ADMIN"]),
-  async (_req, res) => {
+  async (req, res) => {
     try {
-      const users = await User.find().limit(50).sort({ createdAt: -1 }).select("-passwordHash");
+      const { role, status } = req.query;
+      const filter: any = {};
+      
+      if (role) filter.role = role;
+      if (status) filter.status = status;
+
+      // Only admins can see all users, others can only see filtered by role
+      const userRole = req.user?.role;
+      const isAdmin = userRole === "SUPER_ADMIN" || userRole === "HOSPITAL_ADMIN";
+      
+      if (!isAdmin && !role) {
+        return res.status(403).json({ message: "Access denied. Role filter required for non-admin users." });
+      }
+
+      const users = await User.find(filter).limit(200).sort({ createdAt: -1 }).select("-passwordHash");
       // Ensure _id is properly formatted
       const formattedUsers = users.map((user: any) => ({
         _id: String(user._id),
@@ -207,10 +239,16 @@ router.get(
         email: user.email,
         role: user.role,
         phone: user.phone || undefined,
+        phoneNumber: user.phone || undefined,
         hospitalId: user.hospitalId || undefined,
         pharmacyId: user.pharmacyId || undefined,
         distributorId: user.distributorId || undefined,
+        status: user.status || "AVAILABLE",
+        currentOrderId: user.currentOrderId || undefined,
         isActive: user.isActive !== undefined ? user.isActive : true,
+        specialization: user.specialization || undefined,
+        qualification: user.qualification || undefined,
+        serviceCharge: user.serviceCharge !== undefined ? user.serviceCharge : undefined,
         createdAt: user.createdAt,
         updatedAt: user.updatedAt,
       }));
@@ -267,7 +305,6 @@ router.get(
 router.patch(
   "/:id",
   requireAuth,
-  requireRole(["SUPER_ADMIN", "HOSPITAL_ADMIN"]),
   async (req, res) => {
     try {
       // Validate ID parameter
@@ -276,15 +313,26 @@ router.patch(
         return res.status(400).json({ message: "Invalid user ID" });
       }
 
-      const { name, email, phone, role, hospitalId, pharmacyId, distributorId, isActive, password } = req.body;
+      const { name, email, phone, role, hospitalId, pharmacyId, distributorId, isActive, password, status, currentOrderId, specialization, qualification, serviceCharge } = req.body;
+      const userRole = req.user?.role;
+      const isAdmin = userRole === "SUPER_ADMIN" || userRole === "HOSPITAL_ADMIN";
+      const isDistributor = userRole === "DISTRIBUTOR";
+      
       const update: any = {};
       
+      // Get target user to check permissions
+      const targetUser = await User.findById(userId);
+      if (!targetUser) {
+        return res.status(404).json({ message: "User not found" });
+      }
+      
+      // Admins can update all fields
+      if (isAdmin) {
       if (name !== undefined) update.name = name;
       if (email !== undefined) update.email = email;
       if (phone !== undefined) update.phone = phone;
       if (role !== undefined) update.role = role;
       if (hospitalId !== undefined) {
-        // If empty string, set to undefined to clear the field
         update.hospitalId = hospitalId === "" ? undefined : hospitalId;
       }
       if (pharmacyId !== undefined) {
@@ -294,10 +342,39 @@ router.patch(
         update.distributorId = distributorId === "" ? undefined : distributorId;
       }
       if (isActive !== undefined) update.isActive = isActive;
-
-      // Handle password update
       if (password !== undefined && password !== "") {
         update.passwordHash = await bcrypt.hash(password, 10);
+        }
+        if (status !== undefined) update.status = status;
+        if (currentOrderId !== undefined) {
+          update.currentOrderId = currentOrderId === "" ? undefined : currentOrderId;
+        }
+        // Doctor-specific fields
+        if (specialization !== undefined) update.specialization = specialization === "" ? undefined : specialization;
+        if (qualification !== undefined) update.qualification = qualification === "" ? undefined : qualification;
+        if (serviceCharge !== undefined) {
+          update.serviceCharge = serviceCharge === "" || serviceCharge === null ? undefined : parseFloat(serviceCharge);
+        }
+      }
+      // Distributors can update delivery agent status and currentOrderId
+      else if (isDistributor) {
+        // Only allow updating delivery agents
+        if (targetUser.role !== "DELIVERY_AGENT") {
+          return res.status(403).json({ message: "Distributors can only update delivery agent status" });
+        }
+        if (status !== undefined) update.status = status;
+        if (currentOrderId !== undefined) {
+          update.currentOrderId = currentOrderId === "" ? undefined : currentOrderId;
+        }
+      }
+      // Users can update their own profile
+      else {
+        if (String(targetUser._id) !== req.user!.sub) {
+          return res.status(403).json({ message: "You can only update your own profile" });
+        }
+        if (name !== undefined) update.name = name;
+        if (email !== undefined) update.email = email;
+        if (phone !== undefined) update.phone = phone;
       }
 
       // Check if email is already in use by another user
@@ -343,6 +420,11 @@ router.patch(
       if (user.hospitalId) userResponse.hospitalId = user.hospitalId;
       if (user.pharmacyId) userResponse.pharmacyId = user.pharmacyId;
       if (user.distributorId) userResponse.distributorId = user.distributorId;
+      if (user.status) userResponse.status = user.status;
+      if (user.currentOrderId) userResponse.currentOrderId = user.currentOrderId;
+      if (user.specialization) userResponse.specialization = user.specialization;
+      if (user.qualification) userResponse.qualification = user.qualification;
+      if (user.serviceCharge !== undefined) userResponse.serviceCharge = user.serviceCharge;
 
       res.json(userResponse);
     } catch (error: any) {

@@ -39,3 +39,24 @@ router.get("/patient/:patientId", requireAuth, async (req, res) => {
   }
 });
 
+// Delete all activities (admin only)
+router.delete("/all", requireAuth, async (req, res) => {
+  try {
+    const userRole = req.user?.role;
+    
+    // Only SUPER_ADMIN can delete all activities
+    if (userRole !== "SUPER_ADMIN") {
+      return res.status(403).json({ message: "Access denied. Only administrators can delete all activities." });
+    }
+
+    const result = await Activity.deleteMany({});
+    res.json({ 
+      message: "All activities deleted successfully",
+      deletedCount: result.deletedCount 
+    });
+  } catch (error: any) {
+    console.error("Error deleting all activities:", error);
+    res.status(500).json({ message: error.message || "Failed to delete activities" });
+  }
+});
+

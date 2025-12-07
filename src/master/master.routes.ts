@@ -356,9 +356,21 @@ router.delete(
 router.patch(
   "/distributors/:id",
   requireAuth,
-  requireRole(["SUPER_ADMIN", "HOSPITAL_ADMIN"]),
   async (req, res) => {
     try {
+      const userRole = req.user?.role;
+      const isAdmin = userRole === "SUPER_ADMIN" || userRole === "HOSPITAL_ADMIN";
+      const isDistributor = userRole === "DISTRIBUTOR";
+      
+      // Check if distributor can only update their own info
+      if (isDistributor && !isAdmin) {
+        const { User } = await import("../user/user.model");
+        const currentUser = await User.findById(req.user!.sub);
+        if (currentUser && currentUser.distributorId !== req.params.id) {
+          return res.status(403).json({ message: "You can only update your own distributor information" });
+        }
+      }
+      
       const distributor = await Distributor.findByIdAndUpdate(
         req.params.id,
         req.body,

@@ -10,6 +10,12 @@ export interface IDistributorOrder extends Document {
   status: DistributorOrderStatus;
   deliveryOtp?: string;
   deliveryProofImageUrl?: string;
+  deliveryAgentId?: string;
+  deliveryAgentName?: string;
+  deliveryAgentPhone?: string;
+  pickedAt?: Date;
+  outForDeliveryAt?: Date;
+  deliveredAt?: Date;
 }
 
 const DistributorOrderSchema = new Schema<IDistributorOrder>(
@@ -26,6 +32,12 @@ const DistributorOrderSchema = new Schema<IDistributorOrder>(
     },
     deliveryOtp: { type: String },
     deliveryProofImageUrl: { type: String },
+    deliveryAgentId: { type: String },
+    deliveryAgentName: { type: String },
+    deliveryAgentPhone: { type: String },
+    pickedAt: { type: Date },
+    outForDeliveryAt: { type: Date },
+    deliveredAt: { type: Date },
   },
   { timestamps: true }
 );

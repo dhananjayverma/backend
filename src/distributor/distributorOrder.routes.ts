@@ -72,18 +72,51 @@ router.get("/", async (req: Request, res: Response) => {
 
 router.patch("/:id", async (req: Request, res: Response) => {
   try {
-    const { status, deliveryOtp, deliveryProofImageUrl } = req.body;
+    const {
+      status,
+      deliveryOtp,
+      deliveryProofImageUrl,
+      deliveryAgentId,
+      deliveryAgentName,
+      deliveryAgentPhone,
+      pickedAt,
+      outForDeliveryAt,
+      deliveredAt,
+    } = req.body;
 
-    const order = await DistributorOrder.findByIdAndUpdate(
-      req.params.id,
-      { status, deliveryOtp, deliveryProofImageUrl },
-      { new: true }
-    );
+    const updateData: any = {};
+    if (status !== undefined) updateData.status = status;
+    if (deliveryOtp !== undefined) updateData.deliveryOtp = deliveryOtp;
+    if (deliveryProofImageUrl !== undefined) updateData.deliveryProofImageUrl = deliveryProofImageUrl;
+    if (deliveryAgentId !== undefined) updateData.deliveryAgentId = deliveryAgentId;
+    if (deliveryAgentName !== undefined) updateData.deliveryAgentName = deliveryAgentName;
+    if (deliveryAgentPhone !== undefined) updateData.deliveryAgentPhone = deliveryAgentPhone;
+    if (pickedAt !== undefined) updateData.pickedAt = pickedAt ? new Date(pickedAt) : undefined;
+    if (outForDeliveryAt !== undefined)
+      updateData.outForDeliveryAt = outForDeliveryAt ? new Date(outForDeliveryAt) : undefined;
+    if (deliveredAt !== undefined)
+      updateData.deliveredAt = deliveredAt ? new Date(deliveredAt) : undefined;
+
+    const order = await DistributorOrder.findByIdAndUpdate(req.params.id, updateData, { new: true });
 
     if (!order) {
       return res.status(404).json({ message: "Distributor order not found" });
     }
 
+    // Update delivery agent status if assigned
+    if (deliveryAgentId) {
+      try {
+        const { User } = await import("../user/user.model");
+        await User.findByIdAndUpdate(deliveryAgentId, {
+          status: "BUSY",
+          currentOrderId: String(order._id),
+        });
+      } catch (error) {
+        console.error("Failed to update delivery agent status:", error);
+      }
+    }
+
+    // Create activity logs
     if (status === "DELIVERED") {
       await createActivity(
         "DISTRIBUTOR_ORDER_DELIVERED",
@@ -95,11 +128,39 @@ router.patch("/:id", async (req: Request, res: Response) => {
           metadata: { orderId: getOrderId(order), medicineName: order.medicineName },
         }
       );
+
+      // Mark delivery agent as available again
+      if (order.deliveryAgentId) {
+        try {
+          const { User } = await import("../user/user.model");
+          await User.findByIdAndUpdate(order.deliveryAgentId, {
+            status: "AVAILABLE",
+            currentOrderId: undefined,
+          });
+        } catch (error) {
+          console.error("Failed to update delivery agent status:", error);
+        }
+      }
     } else if (status === "DISPATCHED") {
       await createActivity(
-        "DISTRIBUTOR_ORDER_CREATED",
+        "DISTRIBUTOR_ORDER_DISPATCHED",
         "Distributor Order Dispatched",
         `Order for ${order.medicineName} dispatched to Pharmacy ${order.pharmacyId}`,
+        {
+          pharmacyId: order.pharmacyId,
+          distributorId: order.distributorId,
+          metadata: {
+            orderId: getOrderId(order),
+            medicineName: order.medicineName,
+            deliveryAgentId: order.deliveryAgentId,
+          },
+        }
+      );
+    } else if (status === "ACCEPTED") {
+      await createActivity(
+        "DISTRIBUTOR_ORDER_ACCEPTED",
+        "Distributor Order Accepted",
+        `Order for ${order.medicineName} accepted by Distributor ${order.distributorId}`,
         {
           pharmacyId: order.pharmacyId,
           distributorId: order.distributorId,
@@ -112,5 +173,19 @@ router.patch("/:id", async (req: Request, res: Response) => {
   } catch (error: any) {
     console.error("Error updating distributor order:", error);
     res.status(500).json({ message: "Failed to update distributor order", error: error.message });
+  }
+});
+
+// Get distributor order by ID
+router.get("/:id", async (req: Request, res: Response) => {
+  try {
+    const order = await DistributorOrder.findById(req.params.id);
+    if (!order) {
+      return res.status(404).json({ message: "Distributor order not found" });
+    }
+    res.json(order);
+  } catch (error: any) {
+    console.error("Error fetching distributor order:", error);
+    res.status(500).json({ message: "Failed to fetch distributor order", error: error.message });
   }
 });

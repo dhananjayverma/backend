@@ -1,10 +1,10 @@
 import mongoose, { Schema, Document, Model } from "mongoose";
 
 export interface IInventoryItem extends Document {
-  pharmacyId: string;
+  pharmacyId?: string; // Optional for warehouse inventory
   medicineName: string;
-  batchNumber: string;
-  expiryDate: Date;
+  batchNumber?: string;
+  expiryDate?: Date;
   quantity: number;
   threshold: number;
   price?: number; // Price per unit
@@ -13,14 +13,14 @@ export interface IInventoryItem extends Document {
 
 const InventorySchema = new Schema<IInventoryItem>(
   {
-    pharmacyId: { type: String, required: true, index: true },
+    pharmacyId: { type: String, index: true }, // Optional for warehouse inventory
     medicineName: { type: String, required: true, index: true },
-    batchNumber: { type: String, required: true },
-    expiryDate: { type: Date, required: true },
+    batchNumber: { type: String }, // Optional
+    expiryDate: { type: Date }, // Optional
     quantity: { type: Number, required: true },
     threshold: { type: Number, required: true, default: 10 },
     price: { type: Number, default: 100 }, // Default price if not specified
-    distributorId: { type: String },
+    distributorId: { type: String, index: true },
   },
   { timestamps: true }
 );

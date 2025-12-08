@@ -17,6 +17,9 @@ export interface IAppointment extends Document {
   reportFileName?: string;
   reason?: string;
   channel: AppointmentChannel;
+  slotId?: string; // Reference to the slot that was booked
+  cancellationReason?: string; // Reason provided when cancelled by doctor
+  rescheduleReason?: string; // Reason provided when rescheduled by doctor
 }
 
 const AppointmentSchema = new Schema<IAppointment>(
@@ -43,6 +46,9 @@ const AppointmentSchema = new Schema<IAppointment>(
       enum: ["PHYSICAL", "VIDEO"],
       default: "PHYSICAL",
     },
+    slotId: { type: String },
+    cancellationReason: { type: String },
+    rescheduleReason: { type: String },
   },
   { timestamps: true }
 );

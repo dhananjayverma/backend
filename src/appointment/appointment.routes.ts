@@ -12,6 +12,7 @@ import { socketEvents } from "../socket/socket.server";
 import { createDoctorPatientHistory } from "../doctorHistory/doctorHistory.service";
 // Import model to ensure it's initialized
 import "../doctorHistory/doctorHistory.model";
+import { bookSlot, releaseSlot } from "../schedule/schedule.service";
 import multer from "multer";
 import path from "path";
 import fs from "fs";
@@ -77,7 +78,23 @@ router.post(
       throw new AppError("Issue description is required", 400);
     }
 
+    // Validate and book slot if slot-based booking is enabled
+    let bookedSlot = null;
+    try {
+      bookedSlot = await bookSlot(req.body.doctorId, appointmentDate, req.body.hospitalId);
+      if (!bookedSlot) {
+        // Slot not available - check if slot system is being used
+        // For now, allow booking but log warning
+        console.warn(`Slot not available for doctor ${req.body.doctorId} at ${appointmentDate}, but allowing booking`);
+      }
+    } catch (slotError: any) {
+      // If slot system fails, allow booking to proceed (backward compatibility)
+      console.warn("Slot booking check failed:", slotError.message);
+    }
+
       const appointment = await Appointment.create({
+        ...req.body,
+        slotId: bookedSlot?._id ? String(bookedSlot._id) : undefined,
         ...req.body,
         patientName: patientName.trim(),
         age: Number(age),
@@ -158,7 +175,7 @@ router.post(
       console.error("Failed to schedule reminder:", error);
     }
 
-    // Emit Socket.IO events
+    // Emit Socket.IO events with slot information
     socketEvents.emitToUser(appointment.doctorId, "appointment:created", {
       appointmentId: String(appointment._id),
       patientId: appointment.patientId,
@@ -167,7 +184,23 @@ router.post(
       status: appointment.status,
       patientName: appointment.patientName,
       reason: appointment.reason || appointment.issue,
+      slotId: appointment.slotId,
+      slotStartTime: bookedSlot?.startTime,
+      slotEndTime: bookedSlot?.endTime,
     });
+    
+    // Also emit slot booking notification specifically
+    if (bookedSlot) {
+      socketEvents.emitToUser(appointment.doctorId, "slot:booked", {
+        slotId: String(bookedSlot._id),
+        appointmentId: String(appointment._id),
+        patientId: appointment.patientId,
+        patientName: appointment.patientName,
+        startTime: bookedSlot.startTime,
+        endTime: bookedSlot.endTime,
+        scheduledAt: appointment.scheduledAt,
+      });
+    }
     socketEvents.emitToAdmin("appointment:created", {
       appointmentId: String(appointment._id),
       patientId: appointment.patientId,
@@ -299,8 +332,28 @@ router.patch("/:id/status", validateRequired(["status"]), async (req: Request, r
       doctorId: appointment.doctorId,
     });
 
-    // End conversation when appointment is completed or cancelled
-    if (status === "COMPLETED" || status === "CANCELLED") {
+    // Release slot when appointment is cancelled
+    if (status === "CANCELLED") {
+      try {
+        await releaseSlot(appointment.doctorId, appointment.scheduledAt);
+      } catch (slotError: any) {
+        console.warn("Failed to release slot:", slotError.message);
+      }
+
+      const conversation = await Conversation.findOne({
+        appointmentId: String(appointment._id),
+        isActive: true,
+      });
+
+      if (conversation) {
+        conversation.isActive = false;
+        conversation.endedAt = new Date();
+        await conversation.save();
+      }
+    }
+
+    // End conversation when appointment is completed
+    if (status === "COMPLETED") {
       const conversation = await Conversation.findOne({
         appointmentId: String(appointment._id),
         isActive: true,
@@ -394,9 +447,28 @@ router.patch("/:id/reschedule", validateRequired(["scheduledAt"]), async (req: R
       throw new AppError("Appointment cannot be rescheduled to a past date. Please select today or a future date.", 400);
     }
 
-    const updateData: any = { scheduledAt: newDate };
+    // Release old slot and book new slot
+    const oldAppointment = await Appointment.findById(req.params.id);
+    let newBookedSlot = null;
+    if (oldAppointment) {
+      try {
+        await releaseSlot(oldAppointment.doctorId, oldAppointment.scheduledAt);
+        newBookedSlot = await bookSlot(req.body.doctorId || oldAppointment.doctorId, newDate, req.body.hospitalId || oldAppointment.hospitalId);
+      } catch (slotError: any) {
+        console.warn("Slot management failed during reschedule:", slotError.message);
+      }
+    }
+
+    const updateData: any = { 
+      scheduledAt: newDate,
+      slotId: newBookedSlot?._id ? String(newBookedSlot._id) : undefined,
+    };
     if (reason && reason.trim()) {
       updateData.reason = reason.trim();
+    }
+    const rescheduleReason = req.body.rescheduleReason || reason;
+    if (rescheduleReason && rescheduleReason.trim()) {
+      updateData.rescheduleReason = rescheduleReason.trim();
     }
 
     const appointment = await Appointment.findByIdAndUpdate(
@@ -444,6 +516,7 @@ router.patch("/:id/cancel", validateRequired(["cancellationReason"]), async (req
       req.params.id,
       { 
         status: "CANCELLED",
+        cancellationReason: cancellationReason.trim(),
         reason: cancellationReason.trim()
       },
       { new: true }
@@ -451,6 +524,13 @@ router.patch("/:id/cancel", validateRequired(["cancellationReason"]), async (req
 
     if (!appointment) {
       throw new AppError("Appointment not found", 404);
+    }
+
+    // Release slot when appointment is cancelled
+    try {
+      await releaseSlot(appointment.doctorId, appointment.scheduledAt);
+    } catch (slotError: any) {
+      console.warn("Failed to release slot:", slotError.message);
     }
 
     // End conversation if active

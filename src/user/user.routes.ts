@@ -191,13 +191,14 @@ router.get("/check-role/:email", async (req, res) => {
 
 // Public endpoint to get users by role (for doctor listing, etc.)
 router.get("/by-role/:role", async (req, res) => {
+  try {
   const { role } = req.params;
   const users = await User.find({ role })
-    .limit(100)
-    .select("_id name email role hospitalId pharmacyId")
+    .limit(1000)
+      .select("_id name email role hospitalId pharmacyId specialization qualification serviceCharge")
     .sort({ name: 1 })
     .lean();
-  // Ensure _id is included as string
+    // Ensure _id is included as string and include all fields
   const formattedUsers = users.map((user: any) => ({
     _id: user._id.toString(),
     id: user._id.toString(),
@@ -206,8 +207,15 @@ router.get("/by-role/:role", async (req, res) => {
     role: user.role,
     hospitalId: user.hospitalId || undefined,
     pharmacyId: user.pharmacyId || undefined,
+      specialization: user.specialization || undefined,
+      qualification: user.qualification || undefined,
+      serviceCharge: user.serviceCharge !== undefined ? user.serviceCharge : undefined,
   }));
   res.json(formattedUsers);
+  } catch (error: any) {
+    console.error("Error fetching users by role:", error);
+    res.status(500).json({ message: error.message || "Failed to fetch users" });
+  }
 });
 
 // Admin endpoint to get all users (with optional role and status filters)
@@ -522,6 +530,44 @@ router.delete(
       res.json({ message: "User deleted successfully" });
     } catch (error: any) {
       res.status(400).json({ message: error.message || "Failed to delete user" });
+    }
+  }
+);
+
+// Update user location (for real-time tracking)
+router.put(
+  "/:id/location",
+  requireAuth,
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { latitude, longitude, timestamp } = req.body;
+
+      // Validate location data
+      if (typeof latitude !== "number" || typeof longitude !== "number") {
+        return res.status(400).json({ message: "Invalid location coordinates" });
+      }
+
+      if (latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) {
+        return res.status(400).json({ message: "Location coordinates out of range" });
+      }
+
+      // Only allow users to update their own location
+      const userId = (req as any).user?.userId;
+      if (userId !== id) {
+        return res.status(403).json({ message: "You can only update your own location" });
+      }
+
+      // Update user with location (you may want to store this in a separate collection for real-time tracking)
+      // For now, we'll just acknowledge the update
+      // In production, you might want to store this in Redis or a separate Location collection
+
+      res.json({
+        message: "Location updated",
+        location: { latitude, longitude, timestamp: timestamp || new Date().toISOString() },
+      });
+    } catch (error: any) {
+      res.status(400).json({ message: error.message || "Failed to update location" });
     }
   }
 );

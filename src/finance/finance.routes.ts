@@ -105,9 +105,30 @@ router.get("/summary", async (req: Request, res: Response) => {
     if (pharmacyId) filter.pharmacyId = pharmacyId;
 
     const entries = await FinanceEntry.find(filter).limit(DEFAULT_LIMIT);
-    const total = entries.reduce((sum, e) => sum + e.amount, 0);
+    
+    // Calculate revenue (positive amounts) and expenses (negative amounts) separately
+    let revenue = 0;
+    let expenses = 0;
+    
+    entries.forEach((entry) => {
+      if (entry.amount > 0) {
+        revenue += entry.amount;
+      } else {
+        expenses += Math.abs(entry.amount);
+      }
+    });
+    
+    const total = revenue - expenses; // Net profit
+    const summary = calculateFinanceSummary(entries);
 
-    res.json({ total, count: entries.length, entries });
+    res.json({ 
+      total, 
+      revenue, 
+      expenses, 
+      netProfit: total,
+      count: entries.length, 
+      entries 
+    });
   } catch (error: any) {
     console.error("Error fetching finance summary:", error);
     res.status(500).json({ message: "Failed to fetch finance summary", error: error.message });

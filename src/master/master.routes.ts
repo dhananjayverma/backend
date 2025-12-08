@@ -70,7 +70,21 @@ router.post(
   requireRole(["SUPER_ADMIN", "HOSPITAL_ADMIN"]),
   async (req, res) => {
     try {
-      const pharmacy = await Pharmacy.create(req.body) as IPharmacy;
+      const { latitude, longitude, ...pharmacyData } = req.body;
+      
+      const pharmacyBody: any = { ...pharmacyData };
+      
+      // Add location data if provided
+      if (latitude !== undefined && longitude !== undefined) {
+        pharmacyBody.latitude = latitude;
+        pharmacyBody.longitude = longitude;
+        pharmacyBody.location = {
+          type: "Point",
+          coordinates: [longitude, latitude], // MongoDB uses [longitude, latitude]
+        };
+      }
+      
+      const pharmacy = await Pharmacy.create(pharmacyBody) as IPharmacy;
       
       await createActivity(
         "PHARMACY_CREATED",
@@ -112,6 +126,42 @@ router.get(
       if (!pharmacy) {
         return res.status(404).json({ message: "Pharmacy not found" });
       }
+      res.json(pharmacy);
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
+  }
+);
+
+router.patch(
+  "/pharmacies/:id",
+  requireAuth,
+  requireRole(["SUPER_ADMIN", "HOSPITAL_ADMIN"]),
+  async (req, res) => {
+    try {
+      const { latitude, longitude, ...updateData } = req.body;
+      const pharmacy = await Pharmacy.findByIdAndUpdate(
+        req.params.id,
+        {
+          ...updateData,
+          ...(latitude !== undefined && longitude !== undefined
+            ? {
+                latitude,
+                longitude,
+                location: {
+                  type: "Point",
+                  coordinates: [longitude, latitude], // MongoDB uses [longitude, latitude]
+                },
+              }
+            : {}),
+        },
+        { new: true, runValidators: true }
+      );
+
+      if (!pharmacy) {
+        return res.status(404).json({ message: "Pharmacy not found" });
+      }
+
       res.json(pharmacy);
     } catch (error: any) {
       res.status(400).json({ message: error.message });

@@ -18,6 +18,8 @@ import { router as reportRequestRouter } from "./reportRequest/reportRequest.rou
 import { router as settingsRouter } from "./settings/settings.routes";
 import doctorHistoryRouter from "./doctorHistory/doctorHistory.routes";
 import patientHistoryRouter from "./patientHistory/patientHistory.routes";
+import doctorRecordRouter from "./doctor/doctorRecord.routes";
+import { router as scheduleRouter } from "./schedule/schedule.routes";
 
 export function registerRoutes(app: Express) {
   // Public API routes (no authentication required)
@@ -42,6 +44,8 @@ export function registerRoutes(app: Express) {
   app.use("/api/settings", settingsRouter);
   app.use("/api/doctor-history", doctorHistoryRouter);
   app.use("/api/patient-history", patientHistoryRouter);
+  app.use("/api/doctor-records", doctorRecordRouter);
+  app.use("/api/schedules", scheduleRouter);
 
   app.get("/api/health", (_req, res) => {
     res.json({ status: "ok" });

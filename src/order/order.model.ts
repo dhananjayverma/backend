@@ -16,6 +16,9 @@ export interface IOrder extends Document {
   status: OrderStatus;
   deliveryType: "DELIVERY" | "PICKUP";
   address?: string;
+  deliveryAddress?: string;
+  phoneNumber?: string;
+  totalAmount?: number;
   deliveryCharge?: number;
   deliveryPersonId?: string; // ID of delivery person assigned
   deliveryPersonName?: string; // Name of delivery person
@@ -28,6 +31,21 @@ export interface IOrder extends Document {
   adminApprovedAt?: Date; // When admin approved the order
   medicineReceivedAt?: Date; // When medicine was received from supplier
   sentToPharmacyAt?: Date; // When order was sent to pharmacy
+  // Real-time location tracking
+  deliveryLocation?: {
+    latitude: number;
+    longitude: number;
+    timestamp: Date;
+    accuracy?: number;
+  };
+  pharmacyLocation?: {
+    latitude: number;
+    longitude: number;
+  };
+  patientLocation?: {
+    latitude: number;
+    longitude: number;
+  };
 }
 
 const OrderItemSchema = new Schema<IOrderItem>(
@@ -57,6 +75,9 @@ const OrderSchema = new Schema<IOrder>(
       default: "PICKUP",
     },
     address: { type: String },
+    deliveryAddress: { type: String },
+    phoneNumber: { type: String },
+    totalAmount: { type: Number },
     deliveryCharge: { type: Number },
     deliveryPersonId: { type: String },
     deliveryPersonName: { type: String },
@@ -69,6 +90,20 @@ const OrderSchema = new Schema<IOrder>(
     adminApprovedAt: { type: Date },
     medicineReceivedAt: { type: Date },
     sentToPharmacyAt: { type: Date },
+    deliveryLocation: {
+      latitude: { type: Number },
+      longitude: { type: Number },
+      timestamp: { type: Date },
+      accuracy: { type: Number },
+    },
+    pharmacyLocation: {
+      latitude: { type: Number },
+      longitude: { type: Number },
+    },
+    patientLocation: {
+      latitude: { type: Number },
+      longitude: { type: Number },
+    },
   },
   { timestamps: true }
 );

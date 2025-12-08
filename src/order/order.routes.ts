@@ -3,6 +3,7 @@ import { Order, IOrder } from "./order.model";
 import { requireAuth, requireRole } from "../shared/middleware/auth";
 import { createActivity } from "../activity/activity.service";
 import { socketEvents } from "../socket/socket.server";
+import { FinanceEntry } from "../finance/finance.model";
 
 export const router = Router();
 
@@ -81,7 +82,7 @@ router.post(
   requireRole(["PATIENT"]),
   async (req, res) => {
     try {
-      const { pharmacyId, items, deliveryType, deliveryAddress, phoneNumber } = req.body;
+      const { pharmacyId, items, deliveryType, deliveryAddress, phoneNumber, totalAmount, deliveryCharge } = req.body;
       
       if (!pharmacyId) {
         return res.status(400).json({ message: "pharmacyId is required" });
@@ -106,7 +107,73 @@ router.post(
         status: "PENDING",
         deliveryType: deliveryType || "PICKUP",
         deliveryAddress: deliveryType === "DELIVERY" ? deliveryAddress : undefined,
+        phoneNumber,
+        totalAmount: totalAmount || 0,
+        deliveryCharge: deliveryCharge || 0,
+        patientLocation: req.body.patientLocation,
+        pharmacyLocation: req.body.pharmacyLocation,
       });
+
+      // Create finance entries when order is created (payment happens at checkout)
+      if (order.totalAmount && order.totalAmount > 0) {
+        try {
+          const orderId = getOrderId(order);
+          
+          // Check if finance entries already exist for this order
+          const existingEntries = await FinanceEntry.find({
+            "meta.orderId": orderId,
+            type: { $in: ["MEDICINE_SALE", "DELIVERY_CHARGE"] },
+          });
+          
+          // Only create finance entries if they don't already exist
+          if (existingEntries.length === 0) {
+            // Calculate medicine sale amount (totalAmount - deliveryCharge)
+            const medicineAmount = (order.totalAmount || 0) - (order.deliveryCharge || 0);
+            
+            // Create MEDICINE_SALE finance entry
+            if (medicineAmount > 0) {
+              await FinanceEntry.create({
+                pharmacyId: order.pharmacyId,
+                patientId: order.patientId,
+                type: "MEDICINE_SALE",
+                amount: medicineAmount,
+                occurredAt: new Date(),
+                meta: {
+                  orderId: orderId,
+                  items: order.items,
+                  totalAmount: order.totalAmount,
+                },
+              });
+            }
+            
+            // Create DELIVERY_CHARGE finance entry if delivery charge exists
+            if (order.deliveryCharge && order.deliveryCharge > 0) {
+              await FinanceEntry.create({
+                pharmacyId: order.pharmacyId,
+                patientId: order.patientId,
+                type: "DELIVERY_CHARGE",
+                amount: order.deliveryCharge,
+                occurredAt: new Date(),
+                meta: {
+                  orderId: orderId,
+                  deliveryType: order.deliveryType,
+                },
+              });
+            }
+            console.log(`Finance entries created for order ${getShortOrderId(order)} at checkout`);
+            
+            // Emit finance update event to refresh admin dashboard
+            socketEvents.emitToAdmin("finance:updated", {
+              orderId: orderId,
+              pharmacyId: order.pharmacyId,
+              totalAmount: order.totalAmount,
+            });
+          }
+        } catch (financeError: any) {
+          console.error("Error creating finance entries for order:", financeError);
+          // Don't fail order creation if finance entry creation fails
+        }
+      }
 
       await createActivity(
         "ORDER_CREATED",
@@ -121,6 +188,7 @@ router.post(
             itemCount: order.items.length,
             deliveryType: order.deliveryType,
             phoneNumber,
+            totalAmount: order.totalAmount,
           },
         }
       );
@@ -148,12 +216,92 @@ router.post(
         return res.status(400).json({ message: "pharmacyId is required" });
       }
       
+      // Get pharmacy location if available
+      let pharmacyLocation = undefined;
+      if (pharmacyId) {
+        try {
+          const { Pharmacy } = await import("../master/pharmacy.model");
+          const pharmacy = await Pharmacy.findById(pharmacyId);
+          if (pharmacy && pharmacy.latitude && pharmacy.longitude) {
+            pharmacyLocation = {
+              latitude: pharmacy.latitude,
+              longitude: pharmacy.longitude,
+            };
+          }
+        } catch (e) {
+          // Silently fail - pharmacy location is optional
+        }
+      }
+
       const order = await Order.create({
         ...orderData,
         pharmacyId,
         patientId: req.user!.sub,
         status: "PENDING",
+        patientLocation: orderData.patientLocation,
+        pharmacyLocation,
       });
+
+      // Create finance entries when order is created (payment happens at checkout)
+      if (order.totalAmount && order.totalAmount > 0) {
+        try {
+          const orderId = getOrderId(order);
+          
+          // Check if finance entries already exist for this order
+          const existingEntries = await FinanceEntry.find({
+            "meta.orderId": orderId,
+            type: { $in: ["MEDICINE_SALE", "DELIVERY_CHARGE"] },
+          });
+          
+          // Only create finance entries if they don't already exist
+          if (existingEntries.length === 0) {
+            // Calculate medicine sale amount (totalAmount - deliveryCharge)
+            const medicineAmount = (order.totalAmount || 0) - (order.deliveryCharge || 0);
+            
+            // Create MEDICINE_SALE finance entry
+            if (medicineAmount > 0) {
+              await FinanceEntry.create({
+                pharmacyId: order.pharmacyId,
+                patientId: order.patientId,
+                type: "MEDICINE_SALE",
+                amount: medicineAmount,
+                occurredAt: new Date(),
+                meta: {
+                  orderId: orderId,
+                  items: order.items,
+                  totalAmount: order.totalAmount,
+                },
+              });
+            }
+            
+            // Create DELIVERY_CHARGE finance entry if delivery charge exists
+            if (order.deliveryCharge && order.deliveryCharge > 0) {
+              await FinanceEntry.create({
+                pharmacyId: order.pharmacyId,
+                patientId: order.patientId,
+                type: "DELIVERY_CHARGE",
+                amount: order.deliveryCharge,
+                occurredAt: new Date(),
+                meta: {
+                  orderId: orderId,
+                  deliveryType: order.deliveryType,
+                },
+              });
+            }
+            console.log(`Finance entries created for prescription order ${getShortOrderId(order)} at checkout`);
+            
+            // Emit finance update event to refresh admin dashboard
+            socketEvents.emitToAdmin("finance:updated", {
+              orderId: orderId,
+              pharmacyId: order.pharmacyId,
+              totalAmount: order.totalAmount,
+            });
+          }
+        } catch (financeError: any) {
+          console.error("Error creating finance entries for order:", financeError);
+          // Don't fail order creation if finance entry creation fails
+        }
+      }
       
       await createActivity(
         "ORDER_CREATED",
@@ -362,10 +510,46 @@ router.patch(
         return res.status(404).json({ message: "Order not found" });
       }
       
-      if (status === "ACCEPTED" && order.status !== "SENT_TO_PHARMACY") {
+      // Prevent updating to the same status
+      if (order.status === status) {
         return res.status(400).json({ 
-          message: `Order must be SENT_TO_PHARMACY to accept. Current status: ${order.status}` 
+          message: `Order is already ${status}` 
         });
+      }
+      
+      // Prevent updating already delivered or cancelled orders
+      if (order.status === "DELIVERED" || order.status === "CANCELLED") {
+        return res.status(400).json({ 
+          message: `Cannot update order status. Order is already ${order.status}` 
+        });
+      }
+      
+      // Validate status transitions
+      if (status === "ACCEPTED") {
+        const allowedStatuses = ["PENDING", "ORDER_RECEIVED", "MEDICINE_RECEIVED", "SENT_TO_PHARMACY"];
+        if (!allowedStatuses.includes(order.status)) {
+          return res.status(400).json({ 
+            message: `Order cannot be accepted from current status: ${order.status}. Allowed statuses: ${allowedStatuses.join(", ")}` 
+          });
+        }
+      } else if (status === "PACKED") {
+        if (order.status !== "ACCEPTED") {
+          return res.status(400).json({ 
+            message: `Order must be ACCEPTED to pack. Current status: ${order.status}` 
+          });
+        }
+      } else if (status === "OUT_FOR_DELIVERY") {
+        if (order.status !== "PACKED") {
+          return res.status(400).json({ 
+            message: `Order must be PACKED to dispatch. Current status: ${order.status}` 
+          });
+        }
+      } else if (status === "DELIVERED") {
+        if (order.status !== "OUT_FOR_DELIVERY") {
+          return res.status(400).json({ 
+            message: `Order must be OUT_FOR_DELIVERY to mark as delivered. Current status: ${order.status}` 
+          });
+        }
       }
       
       const updateData: any = { status };
@@ -413,11 +597,77 @@ router.patch(
         }
       );
 
+      // Note: Finance entries are created when order is created (at checkout/payment time)
+      // This is kept as a fallback for old orders that don't have finance entries yet
+      if (status === "DELIVERED" && updated && updated.totalAmount && updated.totalAmount > 0) {
+        try {
+          const orderId = getOrderId(updated);
+          
+          // Check if finance entries already exist for this order
+          const existingEntries = await FinanceEntry.find({
+            "meta.orderId": orderId,
+            type: { $in: ["MEDICINE_SALE", "DELIVERY_CHARGE"] },
+          });
+          
+          // Only create finance entries if they don't already exist (fallback for old orders)
+          if (existingEntries.length === 0) {
+            // Calculate medicine sale amount (totalAmount - deliveryCharge)
+            const medicineAmount = (updated.totalAmount || 0) - (updated.deliveryCharge || 0);
+            
+            // Create MEDICINE_SALE finance entry
+            if (medicineAmount > 0) {
+              await FinanceEntry.create({
+                pharmacyId: updated.pharmacyId,
+                patientId: updated.patientId,
+                type: "MEDICINE_SALE",
+                amount: medicineAmount,
+                occurredAt: updated.createdAt || new Date(), // Use order creation time, not delivery time
+                meta: {
+                  orderId: orderId,
+                  items: updated.items,
+                  totalAmount: updated.totalAmount,
+                },
+              });
+            }
+            
+            // Create DELIVERY_CHARGE finance entry if delivery charge exists
+            if (updated.deliveryCharge && updated.deliveryCharge > 0) {
+              await FinanceEntry.create({
+                pharmacyId: updated.pharmacyId,
+                patientId: updated.patientId,
+                type: "DELIVERY_CHARGE",
+                amount: updated.deliveryCharge,
+                occurredAt: updated.createdAt || new Date(), // Use order creation time, not delivery time
+                meta: {
+                  orderId: orderId,
+                  deliveryType: updated.deliveryType,
+                },
+              });
+            }
+            console.log(`Finance entries created for old order ${getShortOrderId(updated)} as fallback`);
+          }
+        } catch (financeError: any) {
+          // Log error but don't fail the order update
+          console.error("Error creating finance entries for delivered order (fallback):", financeError);
+        }
+      }
+
       emitOrderStatusUpdate(order, status, {
         deliveryPersonName: updated?.deliveryPersonName,
         estimatedDeliveryTime: updated?.estimatedDeliveryTime,
         deliveredAt: updated?.deliveredAt,
       });
+      
+      // Emit special event when order is delivered for finance updates
+      if (status === "DELIVERED" && updated) {
+        socketEvents.emitToAdmin("order:delivered", {
+          orderId: getOrderId(updated),
+          patientId: updated.patientId,
+          pharmacyId: updated.pharmacyId,
+          totalAmount: updated.totalAmount,
+          deliveredAt: updated.deliveredAt,
+        });
+      }
       
       res.json(updated);
     } catch (error: any) {
@@ -483,6 +733,92 @@ router.patch(
     } catch (error: any) {
       console.error("Error cancelling order:", error);
       res.status(500).json({ message: "Failed to cancel order", error: error.message });
+    }
+  }
+);
+
+// Get order location (for tracking)
+router.get(
+  "/:id/location",
+  requireAuth,
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+      const userId = (req as any).user?.userId;
+
+      const order = await Order.findById(id);
+      if (!order) {
+        return res.status(404).json({ message: "Order not found" });
+      }
+
+      // Only patient or admin can view order location
+      if (order.patientId !== userId && (req as any).user?.role !== "SUPER_ADMIN" && (req as any).user?.role !== "HOSPITAL_ADMIN") {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      res.json({
+        deliveryLocation: order.deliveryLocation,
+        pharmacyLocation: order.pharmacyLocation,
+        patientLocation: order.patientLocation,
+      });
+    } catch (error: any) {
+      res.status(500).json({ message: "Failed to get order location", error: error.message });
+    }
+  }
+);
+
+// Update delivery location (for delivery person)
+router.put(
+  "/:id/delivery-location",
+  requireAuth,
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { latitude, longitude, accuracy } = req.body;
+      const userId = (req as any).user?.userId;
+
+      // Validate location data
+      if (typeof latitude !== "number" || typeof longitude !== "number") {
+        return res.status(400).json({ message: "Invalid location coordinates" });
+      }
+
+      const order = await Order.findById(id);
+      if (!order) {
+        return res.status(404).json({ message: "Order not found" });
+      }
+
+      // Only delivery person assigned to this order or admin can update
+      if (
+        order.deliveryPersonId !== userId &&
+        (req as any).user?.role !== "SUPER_ADMIN" &&
+        (req as any).user?.role !== "HOSPITAL_ADMIN"
+      ) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      // Update delivery location
+      order.deliveryLocation = {
+        latitude,
+        longitude,
+        timestamp: new Date(),
+        accuracy: accuracy || undefined,
+      };
+
+      await order.save();
+
+      // Emit real-time location update
+      socketEvents.emitToUser(order.patientId, "order:deliveryLocationUpdated", {
+        orderId: String(order._id),
+        location: order.deliveryLocation,
+        patientId: order.patientId,
+      });
+
+      res.json({
+        message: "Delivery location updated",
+        location: order.deliveryLocation,
+      });
+    } catch (error: any) {
+      res.status(500).json({ message: "Failed to update delivery location", error: error.message });
     }
   }
 );

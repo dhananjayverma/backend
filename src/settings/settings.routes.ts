@@ -8,31 +8,19 @@ export const router = Router();
 router.get("/", requireAuth, async (req: Request, res: Response) => {
   try {
     const userId = req.user?.sub;
-    console.log("Fetching settings for user:", userId);
     
-    // Try to find user-specific settings first
     let settings = await Settings.findOne({ userId });
     
-    // If no user-specific settings, get or create global settings
     if (!settings) {
       settings = await Settings.findOne({ userId: { $exists: false } });
       
       if (!settings) {
-        // Create default global settings
-        console.log("Creating default global settings");
         settings = await Settings.create({});
-      } else {
-        console.log("Using global settings");
       }
-    } else {
-      console.log("Using user-specific settings");
     }
     
-    // Convert to plain object and remove MongoDB internal fields
     const settingsObj = settings.toObject();
     delete settingsObj.__v;
-    
-    console.log("Returning settings:", settingsObj);
     res.json(settingsObj);
   } catch (error: any) {
     console.error("Error fetching settings:", error);
@@ -46,27 +34,19 @@ router.put("/", requireAuth, async (req: Request, res: Response) => {
     const userId = req.user?.sub;
     const updateData = req.body;
     
-    console.log("Updating settings for user:", userId, "Data:", updateData);
-    
-    // Remove userId from update data if present
     delete updateData.userId;
     delete updateData._id;
     delete updateData.createdAt;
     delete updateData.updatedAt;
     delete updateData.__v;
     
-    // Try to find user-specific settings
     let settings = await Settings.findOne({ userId });
     
     if (settings) {
-      // Update existing settings
       Object.assign(settings, updateData);
       await settings.save();
-      console.log("Updated existing settings");
     } else {
-      // Create new user-specific settings
       settings = await Settings.create({ userId, ...updateData });
-      console.log("Created new user-specific settings");
     }
     
     // Convert to plain object and remove MongoDB internal fields

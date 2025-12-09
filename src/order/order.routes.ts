@@ -160,7 +160,6 @@ router.post(
                 },
               });
             }
-            console.log(`Finance entries created for order ${getShortOrderId(order)} at checkout`);
             
             // Emit finance update event to refresh admin dashboard
             socketEvents.emitToAdmin("finance:updated", {
@@ -390,6 +389,57 @@ router.get(
     } catch (error: any) {
       console.error("Error fetching orders by pharmacy:", error);
       res.status(500).json({ message: "Failed to fetch orders", error: error.message });
+    }
+  }
+);
+
+// Get single order by ID (Patient can view own orders, Admin/Pharmacy can view any)
+// Must come after /by-pharmacy/:pharmacyId to avoid route conflicts
+router.get(
+  "/:id",
+  requireAuth,
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+      const order = await Order.findById(id);
+      
+      if (!order) {
+        return res.status(404).json({ message: "Order not found" });
+      }
+
+      // Check authorization - patient can only view their own orders
+      const userId = req.user!.sub;
+      const userRole = req.user!.role;
+      const isAdmin = userRole === "SUPER_ADMIN" || userRole === "HOSPITAL_ADMIN";
+      const isPharmacyStaff = userRole === "PHARMACY_STAFF";
+      
+      // Convert both IDs to strings for comparison
+      const orderPatientIdStr = String(order.patientId);
+      const userIdStr = String(userId);
+      
+      if (!isAdmin && !isPharmacyStaff && orderPatientIdStr !== userIdStr) {
+        return res.status(403).json({ message: "You can only view your own orders" });
+      }
+
+      // Populate pharmacy info if available
+      let orderWithPharmacy: any = order.toObject();
+      try {
+        const { Pharmacy } = await import("../master/pharmacy.model");
+        const pharmacy = await Pharmacy.findById(order.pharmacyId);
+        if (pharmacy) {
+          orderWithPharmacy.pharmacy = {
+            name: pharmacy.name,
+            address: pharmacy.address,
+          };
+        }
+      } catch (e) {
+        // Silently fail - pharmacy info is optional
+      }
+
+      res.json(orderWithPharmacy);
+    } catch (error: any) {
+      console.error("Error fetching order:", error);
+      res.status(500).json({ message: "Failed to fetch order", error: error.message });
     }
   }
 );
@@ -822,3 +872,53 @@ router.put(
     }
   }
 );
+
+// Delete order (Patient can delete their own, Admin can delete any)
+router.delete("/:id", requireAuth, async (req, res) => {
+  try {
+    const order = await Order.findById(req.params.id);
+    if (!order) {
+      return res.status(404).json({ message: "Order not found" });
+    }
+
+    // Check authorization - patients can only delete their own orders
+    const userId = req.user!.sub;
+    const userRole = req.user!.role;
+    const isAdmin = userRole === "SUPER_ADMIN" || userRole === "HOSPITAL_ADMIN";
+    
+    if (userRole === "PATIENT" && String(order.patientId) !== String(userId)) {
+      return res.status(403).json({ message: "You can only delete your own orders" });
+    }
+    
+    if (!isAdmin && userRole !== "PATIENT") {
+      return res.status(403).json({ message: "You are not authorized to delete orders" });
+    }
+
+    // Only allow deletion if order is PENDING or CANCELLED
+    if (order.status !== "PENDING" && order.status !== "CANCELLED") {
+      return res.status(400).json({ 
+        message: `Cannot delete order. Only PENDING or CANCELLED orders can be deleted. Current status: ${order.status}`,
+        currentStatus: order.status
+      });
+    }
+
+    await Order.findByIdAndDelete(req.params.id);
+
+    await createActivity(
+      "ORDER_DELETED",
+      "Order Deleted",
+      `Order ${getShortOrderId(order)} deleted`,
+      {
+        patientId: order.patientId,
+        pharmacyId: order.pharmacyId,
+        metadata: { orderId: getOrderId(order) },
+      }
+    );
+
+    emitOrderCancelled(order);
+
+    res.json({ message: "Order deleted successfully" });
+  } catch (error: any) {
+    res.status(500).json({ message: "Failed to delete order", error: error.message });
+  }
+});

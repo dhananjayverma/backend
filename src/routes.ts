@@ -20,6 +20,9 @@ import doctorHistoryRouter from "./doctorHistory/doctorHistory.routes";
 import patientHistoryRouter from "./patientHistory/patientHistory.routes";
 import doctorRecordRouter from "./doctor/doctorRecord.routes";
 import { router as scheduleRouter } from "./schedule/schedule.routes";
+import { router as mfaRouter } from "./user/mfa.routes";
+import { router as transcriptionRouter } from "./transcription/transcription.routes";
+import { router as invoiceRouter } from "./invoice/invoice.routes";
 
 export function registerRoutes(app: Express) {
   // Public API routes (no authentication required)
@@ -27,6 +30,8 @@ export function registerRoutes(app: Express) {
   
   // Protected API routes (authentication required)
   app.use("/api/users", userRouter);
+  app.use("/api/users/mfa", mfaRouter);
+  app.use("/api/transcription", transcriptionRouter);
   app.use("/api/appointments", appointmentRouter);
   app.use("/api/prescriptions", prescriptionRouter);
   app.use("/api/inventory", inventoryRouter);
@@ -46,6 +51,7 @@ export function registerRoutes(app: Express) {
   app.use("/api/patient-history", patientHistoryRouter);
   app.use("/api/doctor-records", doctorRecordRouter);
   app.use("/api/schedules", scheduleRouter);
+  app.use("/api/invoices", invoiceRouter);
 
   app.get("/api/health", (_req, res) => {
     res.json({ status: "ok" });

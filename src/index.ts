@@ -5,6 +5,7 @@ import morgan from "morgan";
 import { createServer } from "http";
 import "express-async-errors";
 import path from "path";
+import cookieParser from "cookie-parser";
 
 import { registerRoutes } from "./routes";
 import { errorHandler } from "./shared/middleware/errorHandler";
@@ -29,7 +30,34 @@ app.use((req, res, next) => {
   next();
 });
 
-app.use(cors());
+// CORS configuration - allow multiple frontend origins
+const allowedOrigins = [
+  process.env.FRONTEND_URL || "http://localhost:3000",
+  "http://localhost:3000", // Default Next.js port
+  "http://localhost:3001", // Alternative port for patient app
+  "http://localhost:3002", // Alternative port for doctor app
+];
+
+app.use(cors({
+  origin: (origin, callback) => {
+    // Allow requests with no origin (like mobile apps or Postman)
+    if (!origin) return callback(null, true);
+    
+    // Check if origin is in allowed list
+    if (allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      // In development, allow all localhost origins
+      if (process.env.NODE_ENV !== "production" && origin.includes("localhost")) {
+        callback(null, true);
+      } else {
+        callback(new Error("Not allowed by CORS"));
+      }
+    }
+  },
+  credentials: true,
+}));
+app.use(cookieParser());
 app.use(express.json());
 app.use(morgan("dev"));
 app.use(audit);

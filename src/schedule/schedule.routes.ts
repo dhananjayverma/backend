@@ -12,6 +12,7 @@ import {
 import { validateRequired } from "../shared/middleware/validation";
 import { AppError } from "../shared/middleware/errorHandler";
 import { Appointment } from "../appointment/appointment.model";
+import { requireAuth, requireRole } from "../shared/middleware/auth";
 
 export const router = Router();
 
@@ -20,6 +21,8 @@ export const router = Router();
 // Create or update doctor schedule
 router.post(
   "/doctor-schedule",
+  requireAuth,
+  requireRole(["DOCTOR", "SUPER_ADMIN", "HOSPITAL_ADMIN"]),
   validateRequired(["doctorId", "dayOfWeek", "startTime", "endTime", "slotDuration"]),
   async (req: Request, res: Response) => {
     try {
@@ -111,7 +114,7 @@ router.get("/doctor-schedule", async (req: Request, res: Response) => {
 });
 
 // Delete doctor schedule
-router.delete("/doctor-schedule/:id", async (req: Request, res: Response) => {
+router.delete("/doctor-schedule/:id", requireAuth, requireRole(["DOCTOR", "SUPER_ADMIN", "HOSPITAL_ADMIN"]), async (req: Request, res: Response) => {
   try {
     const schedule = await DoctorSchedule.findByIdAndDelete(req.params.id);
     if (!schedule) {
@@ -138,10 +141,16 @@ router.get("/slots/available", async (req: Request, res: Response) => {
       throw new AppError("doctorId and date are required", 400);
     }
 
+    // Parse and normalize date
     const slotDate = new Date(date as string);
     if (isNaN(slotDate.getTime())) {
       throw new AppError("Invalid date format", 400);
     }
+    
+    // Normalize date to start of day
+    slotDate.setHours(0, 0, 0, 0);
+
+    console.log(`[Slots] Fetching available slots for doctorId: ${doctorId}, date: ${slotDate.toISOString()}, hospitalId: ${hospitalId || 'none'}`);
 
     const slots = await getAvailableSlots(
       doctorId as string,
@@ -149,8 +158,10 @@ router.get("/slots/available", async (req: Request, res: Response) => {
       hospitalId as string | undefined
     );
 
+    console.log(`[Slots] Found ${slots.length} available slots`);
     res.json(slots);
   } catch (error: any) {
+    console.error("[Slots] Error fetching available slots:", error);
     if (error instanceof AppError) {
       res.status(error.status).json({ message: error.message });
     } else {

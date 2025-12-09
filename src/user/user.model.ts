@@ -25,6 +25,10 @@ export interface IUser extends Document {
   specialization?: string;
   qualification?: string;
   serviceCharge?: number;
+  // MFA fields
+  mfaEnabled?: boolean;
+  mfaSecret?: string; // TOTP secret for 2FA
+  backupCodes?: string[]; // Backup codes for MFA
 }
 
 const UserSchema = new Schema<IUser>(
@@ -52,6 +56,10 @@ const UserSchema = new Schema<IUser>(
     specialization: { type: String },
     qualification: { type: String },
     serviceCharge: { type: Number },
+    // MFA fields
+    mfaEnabled: { type: Boolean, default: false },
+    mfaSecret: { type: String },
+    backupCodes: { type: [String], default: [] },
   },
   { timestamps: true }
 );
@@ -60,5 +68,3 @@ const UserSchema = new Schema<IUser>(
 UserSchema.index({ name: "text", email: "text" });
 
 export const User: Model<IUser> = mongoose.models.User || mongoose.model<IUser>("User", UserSchema);
-
-

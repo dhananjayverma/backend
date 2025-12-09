@@ -17,22 +17,30 @@ const BEARER_PREFIX = "Bearer ";
 const BEARER_PREFIX_LENGTH = BEARER_PREFIX.length;
 
 export function requireAuth(req: Request, res: Response, next: NextFunction): void {
+  let token: string | undefined;
+
+  // Try to get token from Authorization header first
   const header = req.headers.authorization;
+  if (header?.startsWith(BEARER_PREFIX)) {
+    token = header.substring(BEARER_PREFIX_LENGTH);
+  }
   
-  if (!header?.startsWith(BEARER_PREFIX)) {
-    res.status(401).json({ message: "Missing or invalid authorization header" });
+  // Fallback to cookie if header not present
+  if (!token) {
+    token = req.cookies?.token;
+  }
+
+  if (!token) {
+    res.status(401).json({ message: "Authentication required" });
     return;
   }
 
-  const token = header.substring(BEARER_PREFIX_LENGTH);
-
   try {
-    // Verify token, but ignore expiration errors since tokens never expire
     const decoded = jwt.verify(token, JWT_SECRET, { ignoreExpiration: true }) as AuthUser;
     req.user = decoded;
     next();
   } catch (error) {
-    res.status(401).json({ message: "Invalid token" });
+    res.status(401).json({ message: "Invalid or expired token" });
   }
 }
 

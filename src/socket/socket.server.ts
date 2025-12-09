@@ -31,9 +31,32 @@ const getUserRoom = (userId: string): string => `user:${userId}`;
 const getRoleRoom = (role: string): string => `role:${role}`;
 
 export function initializeSocket(server: HTTPServer): SocketIOServer {
+  // Allow multiple frontend origins for Socket.IO
+  const allowedOrigins = [
+    process.env.FRONTEND_URL || "http://localhost:3000",
+    "http://localhost:3000", // Default Next.js port
+    "http://localhost:3001", // Alternative port for patient app
+    "http://localhost:3002", // Alternative port for doctor app
+  ];
+
   io = new SocketIOServer(server, {
     cors: {
-      origin: process.env.CORS_ORIGIN || "*", // In production, specify exact origins
+      origin: (origin, callback) => {
+        // Allow requests with no origin (like mobile apps or Postman)
+        if (!origin) return callback(null, true);
+        
+        // Check if origin is in allowed list
+        if (allowedOrigins.includes(origin)) {
+          callback(null, true);
+        } else {
+          // In development, allow all localhost origins
+          if (process.env.NODE_ENV !== "production" && origin.includes("localhost")) {
+            callback(null, true);
+          } else {
+            callback(new Error("Not allowed by CORS"));
+          }
+        }
+      },
       methods: ["GET", "POST"],
       credentials: true,
     },

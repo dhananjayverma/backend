@@ -7,7 +7,10 @@ export type FinanceType =
   | "DOCTOR_COMMISSION"
   | "DISCOUNT"
   | "STOCK_PURCHASE"
-  | "EXPIRED_STOCK_LOSS";
+  | "EXPIRED_STOCK_LOSS"
+  | "EXTRA_FEE"
+  | "TREATMENT_FEE"
+  | "PROCEDURE_FEE";
 
 export interface IFinanceEntry extends Document {
   hospitalId?: string;
@@ -38,6 +41,9 @@ const FinanceSchema = new Schema<IFinanceEntry>(
         "DISCOUNT",
         "STOCK_PURCHASE",
         "EXPIRED_STOCK_LOSS",
+        "EXTRA_FEE",
+        "TREATMENT_FEE",
+        "PROCEDURE_FEE",
       ],
       required: true,
       index: true,

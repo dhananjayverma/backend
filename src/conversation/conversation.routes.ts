@@ -5,6 +5,7 @@ import { validateRequest } from "../shared/middleware/validation";
 import { body } from "express-validator";
 import { createActivity } from "../activity/activity.service";
 import { socketEvents } from "../socket/socket.server";
+import { createNotification } from "../notifications/notification.service";
 
 export const router = Router();
 
@@ -70,6 +71,33 @@ router.post(
             },
           }
         );
+
+        // Notify patient that consultation has started
+        try {
+          const { User } = await import("../user/user.model");
+          const doctor = await User.findById(finalDoctorId);
+          await createNotification({
+            userId: finalPatientId,
+            type: "CONSULTATION_STARTED",
+            title: "Consultation Started",
+            message: `Dr. ${doctor?.name || "Doctor"} has started your consultation. You can now chat with your doctor.`,
+            metadata: {
+              appointmentId,
+              conversationId: getConversationId(conversation),
+              doctorId: finalDoctorId,
+            },
+            channel: "PUSH",
+          });
+          
+          // Emit socket event
+          socketEvents.emitToUser(finalPatientId, "notification:new", {
+            type: "CONSULTATION_STARTED",
+            title: "Consultation Started",
+            message: `Dr. ${doctor?.name || "Doctor"} has started your consultation.`,
+          });
+        } catch (error) {
+          console.error("Failed to create notification for consultation start:", error);
+        }
       }
 
       res.json(conversation);
@@ -126,6 +154,39 @@ router.post(
       // Emit to both doctor and patient
       socketEvents.emitToUser(conversation.doctorId, "message:created", messageData);
       socketEvents.emitToUser(conversation.patientId, "message:created", messageData);
+
+      // Notify the other party about new message
+      try {
+        const { User } = await import("../user/user.model");
+        const sender = await User.findById(message.senderId);
+        const recipientId = message.senderRole === "DOCTOR" ? conversation.patientId : conversation.doctorId;
+        const recipient = await User.findById(recipientId);
+        
+        if (recipientId && message.messageType === "TEXT") {
+          await createNotification({
+            userId: recipientId,
+            type: "MESSAGE_RECEIVED",
+            title: "New Message",
+            message: `You have a new message from ${sender?.name || (message.senderRole === "DOCTOR" ? "Doctor" : "Patient")}`,
+            metadata: {
+              conversationId: getConversationId(conversation),
+              appointmentId: conversation.appointmentId,
+              senderId: message.senderId,
+              senderRole: message.senderRole,
+            },
+            channel: "PUSH",
+          });
+          
+          // Emit notification event
+          socketEvents.emitToUser(recipientId, "notification:new", {
+            type: "MESSAGE_RECEIVED",
+            title: "New Message",
+            message: `New message from ${sender?.name || (message.senderRole === "DOCTOR" ? "Doctor" : "Patient")}`,
+          });
+        }
+      } catch (error) {
+        console.error("Failed to create notification for message:", error);
+      }
 
       res.json(conversation);
     } catch (error: any) {
@@ -191,6 +252,33 @@ router.patch(
       if (isActive === false && !conversation.endedAt) {
         conversation.endedAt = new Date();
         await conversation.save();
+        
+        // Notify patient that consultation has ended
+        try {
+          const { User } = await import("../user/user.model");
+          const doctor = await User.findById(conversation.doctorId);
+          await createNotification({
+            userId: conversation.patientId,
+            type: "CONSULTATION_ENDED",
+            title: "Consultation Ended",
+            message: `Your consultation with Dr. ${doctor?.name || "Doctor"} has ended. Prescription will be available soon.`,
+            metadata: {
+              appointmentId: conversation.appointmentId,
+              conversationId: getConversationId(conversation),
+              doctorId: conversation.doctorId,
+            },
+            channel: "PUSH",
+          });
+          
+          // Emit socket event
+          socketEvents.emitToUser(conversation.patientId, "notification:new", {
+            type: "CONSULTATION_ENDED",
+            title: "Consultation Ended",
+            message: `Your consultation has ended. Prescription will be available soon.`,
+          });
+        } catch (error) {
+          console.error("Failed to create notification for consultation end:", error);
+        }
       }
 
       res.json(conversation);
@@ -218,5 +306,58 @@ router.get("/", requireAuth, async (req: Request, res: Response) => {
   } catch (error: any) {
     console.error("Error fetching conversations:", error);
     res.status(500).json({ message: "Failed to fetch conversations", error: error.message });
+  }
+});
+
+// Delete conversation (Patient can delete their own, Doctor/Admin can delete any)
+router.delete("/:id", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const conversation = await Conversation.findById(req.params.id);
+    if (!conversation) {
+      return res.status(404).json({ message: "Conversation not found" });
+    }
+
+    // Check authorization - patients can only delete their own conversations
+    const userId = (req as any).user?.sub;
+    const userRole = (req as any).user?.role;
+    const isAdmin = userRole === "SUPER_ADMIN" || userRole === "HOSPITAL_ADMIN";
+    const isDoctor = userRole === "DOCTOR";
+    const isPatient = userRole === "PATIENT";
+    
+    if (isPatient && String(conversation.patientId) !== String(userId)) {
+      return res.status(403).json({ message: "You can only delete your own conversations" });
+    }
+    
+    if (isDoctor && String(conversation.doctorId) !== String(userId) && !isAdmin) {
+      return res.status(403).json({ message: "You can only delete your own conversations" });
+    }
+
+    await Conversation.findByIdAndDelete(req.params.id);
+
+    await createActivity(
+      "CONVERSATION_DELETED",
+      "Conversation Deleted",
+      `Conversation ${getConversationId(conversation)} deleted`,
+      {
+        appointmentId: conversation.appointmentId,
+        doctorId: conversation.doctorId,
+        patientId: conversation.patientId,
+        metadata: { conversationId: getConversationId(conversation) },
+      }
+    );
+
+    socketEvents.emitToUser(conversation.patientId, "conversation:deleted", {
+      conversationId: getConversationId(conversation),
+      appointmentId: conversation.appointmentId,
+    });
+    socketEvents.emitToUser(conversation.doctorId, "conversation:deleted", {
+      conversationId: getConversationId(conversation),
+      appointmentId: conversation.appointmentId,
+    });
+
+    res.json({ message: "Conversation deleted successfully" });
+  } catch (error: any) {
+    console.error("Error deleting conversation:", error);
+    res.status(500).json({ message: "Failed to delete conversation", error: error.message });
   }
 });

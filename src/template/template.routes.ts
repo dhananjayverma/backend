@@ -11,7 +11,7 @@ export const router = Router();
 router.get(
   "/",
   requireAuth,
-  requireRole(["SUPER_ADMIN", "HOSPITAL_ADMIN", "DOCTOR", "PHARMACY_STAFF"]),
+  requireRole(["SUPER_ADMIN", "HOSPITAL_ADMIN", "DOCTOR", "PHARMACY_STAFF", "PATIENT"]),
   async (req: Request, res: Response) => {
     try {
       const { type, hospitalId } = req.query;
@@ -31,7 +31,7 @@ router.get(
   }
 );
 
-// Get default template for a type
+// Get default template for a type (accessible to all authenticated users including patients)
 router.get(
   "/default/:type",
   requireAuth,

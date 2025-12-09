@@ -2,9 +2,10 @@ import { Router, Request, Response } from "express";
 import mongoose from "mongoose";
 import { Appointment, IAppointment } from "./appointment.model";
 import { createActivity } from "../activity/activity.service";
-import { sendAppointmentReminder } from "../notifications/notification.service";
+import { sendAppointmentReminder, createNotification } from "../notifications/notification.service";
 import { validateRequired } from "../shared/middleware/validation";
 import { AppError } from "../shared/middleware/errorHandler";
+import { requireAuth } from "../shared/middleware/auth";
 import { User } from "../user/user.model";
 import { Conversation } from "../conversation/conversation.model";
 import { Prescription } from "../prescription/prescription.model";
@@ -13,6 +14,7 @@ import { createDoctorPatientHistory } from "../doctorHistory/doctorHistory.servi
 // Import model to ensure it's initialized
 import "../doctorHistory/doctorHistory.model";
 import { bookSlot, releaseSlot } from "../schedule/schedule.service";
+import { Hospital } from "../master/hospital.model";
 import multer from "multer";
 import path from "path";
 import fs from "fs";
@@ -41,6 +43,7 @@ const upload = multer({
 // Create appointment (Patient app, Admin portal)
 router.post(
   "/",
+  requireAuth,
   validateRequired(["hospitalId", "doctorId", "patientId", "scheduledAt", "patientName", "age", "address", "issue"]),
   async (req: Request, res: Response) => {
     try {
@@ -103,16 +106,8 @@ router.post(
         reason: issue.trim(),
       }) as IAppointment;
     
-    // Record appointment in doctor-patient history when created
     try {
-      console.log("📝 Creating appointment history on creation:", {
-        doctorId: appointment.doctorId,
-        patientId: appointment.patientId,
-        patientName: appointment.patientName,
-        appointmentId: String(appointment._id),
-      });
-      
-      const historyRecord = await createDoctorPatientHistory({
+      await createDoctorPatientHistory({
         doctorId: appointment.doctorId,
         patientId: appointment.patientId,
         patientName: appointment.patientName,
@@ -126,8 +121,6 @@ router.post(
           created: true,
         },
       });
-      
-      console.log("✅ Appointment history created on creation:", historyRecord._id);
     } catch (historyError: any) {
       console.error("❌ Failed to record appointment history on creation:", historyError);
       console.error("Error details:", {
@@ -175,6 +168,43 @@ router.post(
       console.error("Failed to schedule reminder:", error);
     }
 
+    // Create notification for doctor
+    try {
+      await createNotification({
+        userId: appointment.doctorId,
+        type: "APPOINTMENT_REQUEST",
+        title: "New Appointment Request",
+        message: `New appointment request from ${appointment.patientName} for ${appointmentDate.toLocaleString()}. Issue: ${appointment.issue}`,
+        metadata: {
+          appointmentId: String(appointment._id),
+          patientId: appointment.patientId,
+          patientName: appointment.patientName,
+          scheduledAt: appointment.scheduledAt,
+        },
+        channel: "PUSH",
+      });
+    } catch (error) {
+      console.error("Failed to create notification for doctor:", error);
+    }
+
+    // Create notification for patient
+    try {
+      await createNotification({
+        userId: appointment.patientId,
+        type: "APPOINTMENT_BOOKED",
+        title: "Appointment Booked",
+        message: `Your appointment with Dr. ${doctor?.name || "Doctor"} has been booked for ${appointmentDate.toLocaleString()}. Status: Pending confirmation.`,
+        metadata: {
+          appointmentId: String(appointment._id),
+          doctorId: appointment.doctorId,
+          scheduledAt: appointment.scheduledAt,
+        },
+        channel: "PUSH",
+      });
+    } catch (error) {
+      console.error("Failed to create notification for patient:", error);
+    }
+
     // Emit Socket.IO events with slot information
     socketEvents.emitToUser(appointment.doctorId, "appointment:created", {
       appointmentId: String(appointment._id),
@@ -187,6 +217,13 @@ router.post(
       slotId: appointment.slotId,
       slotStartTime: bookedSlot?.startTime,
       slotEndTime: bookedSlot?.endTime,
+    });
+    
+    // Also emit notification event
+    socketEvents.emitToUser(appointment.doctorId, "notification:new", {
+      type: "APPOINTMENT_REQUEST",
+      title: "New Appointment Request",
+      message: `New appointment request from ${appointment.patientName}`,
     });
     
     // Also emit slot booking notification specifically
@@ -221,19 +258,96 @@ router.post(
 );
 
 // List appointments filtered by doctor/patient/hospital
-router.get("/", async (req: Request, res: Response) => {
+router.get("/", requireAuth, async (req: Request, res: Response) => {
   try {
     const { doctorId, patientId, hospitalId, status } = req.query;
+    const userId = (req as any).user?.sub;
+    const userRole = (req as any).user?.role;
 
     const filter: any = {};
-    if (doctorId) filter.doctorId = doctorId;
-    if (patientId) filter.patientId = patientId;
+    
+    // If patientId is provided, use it
+    if (patientId) {
+      filter.patientId = patientId;
+    } else if (userRole === "PATIENT") {
+      // If user is a patient and no patientId provided, use their own ID
+      filter.patientId = userId;
+    }
+    
+    // If doctorId is provided, use it
+    if (doctorId) {
+      filter.doctorId = doctorId;
+    } else if (userRole === "DOCTOR") {
+      // If user is a doctor and no doctorId provided, use their own ID
+      filter.doctorId = userId;
+    }
+    
     if (hospitalId) filter.hospitalId = hospitalId;
     if (status) filter.status = status;
 
+    console.log("Fetching appointments with filter:", filter);
     const items = await Appointment.find(filter).sort({ scheduledAt: 1 }).limit(100);
-    res.json(items);
+    console.log(`Found ${items.length} appointments`);
+    
+    // Populate doctor and hospital information
+    const enrichedItems = await Promise.all(
+      items.map(async (appointment: any) => {
+        const appointmentObj = appointment.toObject ? appointment.toObject() : appointment;
+        
+        // Fetch doctor information
+        let doctor = null;
+        if (appointmentObj.doctorId) {
+          try {
+            const doctorDoc = await User.findById(appointmentObj.doctorId)
+              .select("name email specialization qualification serviceCharge")
+              .lean();
+            if (doctorDoc) {
+              doctor = {
+                _id: String(doctorDoc._id),
+                name: doctorDoc.name,
+                specialization: doctorDoc.specialization || undefined,
+                qualification: doctorDoc.qualification || undefined,
+                serviceCharge: doctorDoc.serviceCharge || undefined,
+              };
+            }
+          } catch (error: any) {
+            console.error(`Error fetching doctor ${appointmentObj.doctorId}:`, error.message);
+          }
+        }
+        
+        // Fetch hospital information
+        let hospital = null;
+        if (appointmentObj.hospitalId) {
+          try {
+            const hospitalDoc = await Hospital.findById(appointmentObj.hospitalId)
+              .select("name address city state contactNumber")
+              .lean();
+            if (hospitalDoc) {
+              hospital = {
+                _id: String(hospitalDoc._id),
+                name: hospitalDoc.name,
+                address: hospitalDoc.address,
+                city: hospitalDoc.city || undefined,
+                state: hospitalDoc.state || undefined,
+                contactNumber: hospitalDoc.contactNumber || undefined,
+              };
+            }
+          } catch (error: any) {
+            console.error(`Error fetching hospital ${appointmentObj.hospitalId}:`, error.message);
+          }
+        }
+        
+        return {
+          ...appointmentObj,
+          doctor,
+          hospital,
+        };
+      })
+    );
+    
+    res.json(enrichedItems);
   } catch (error: any) {
+    console.error("Error fetching appointments:", error);
     res.status(400).json({ message: error.message });
   }
 });
@@ -256,7 +370,7 @@ router.get("/:id", async (req: Request, res: Response) => {
 });
 
 // Update status (Doctor & Admin)
-router.patch("/:id/status", validateRequired(["status"]), async (req: Request, res: Response) => {
+router.patch("/:id/status", requireAuth, validateRequired(["status"]), async (req: Request, res: Response) => {
   try {
   const { status } = req.body;
   
@@ -265,15 +379,39 @@ router.patch("/:id/status", validateRequired(["status"]), async (req: Request, r
     throw new AppError(`Invalid status. Must be one of: ${validStatuses.join(", ")}`, 400);
   }
 
-    const appointment = await Appointment.findByIdAndUpdate(
+    const appointment = await Appointment.findById(req.params.id) as IAppointment | null;
+    if (!appointment) {
+      throw new AppError("Appointment not found", 404);
+    }
+
+    // Check authorization
+    const userId = req.user?.sub;
+    const userRole = req.user?.role;
+    const isAdmin = userRole === "SUPER_ADMIN" || userRole === "HOSPITAL_ADMIN";
+    const isDoctor = userRole === "DOCTOR";
+    const isPatient = userRole === "PATIENT";
+    
+    // Convert both IDs to strings for comparison
+    const doctorIdStr = String(appointment.doctorId);
+    const patientIdStr = String(appointment.patientId);
+    const userIdStr = String(userId);
+    
+    // Allow patients to mark their own appointments as COMPLETED
+    if (isPatient && status === "COMPLETED" && patientIdStr === userIdStr) {
+      // Patient can mark their own appointment as completed
+    } else if (isAdmin) {
+      // Admin can update any appointment
+    } else if (isDoctor && doctorIdStr === userIdStr) {
+      // Doctor can update their own appointments
+    } else {
+      throw new AppError("You don't have permission to update this appointment", 403);
+    }
+
+    const updated = await Appointment.findByIdAndUpdate(
       req.params.id,
       { status },
       { new: true }
     ) as IAppointment | null;
-
-    if (!appointment) {
-      throw new AppError("Appointment not found", 404);
-    }
   
     // Auto-create conversation when appointment is confirmed
     if (status === "CONFIRMED") {
@@ -310,6 +448,57 @@ router.patch("/:id/status", validateRequired(["status"]), async (req: Request, r
       }
     }
 
+    // Create notifications based on status
+    try {
+      const doctor = await User.findById(appointment.doctorId);
+      const patient = await User.findById(appointment.patientId);
+      
+      if (status === "CONFIRMED") {
+        // Notify patient
+        await createNotification({
+          userId: appointment.patientId,
+          type: "APPOINTMENT_CONFIRMED",
+          title: "Appointment Confirmed",
+          message: `Your appointment with Dr. ${doctor?.name || "Doctor"} has been confirmed for ${new Date(appointment.scheduledAt).toLocaleString()}.`,
+          metadata: {
+            appointmentId: String(appointment._id),
+            doctorId: appointment.doctorId,
+            scheduledAt: appointment.scheduledAt,
+          },
+          channel: "PUSH",
+        });
+      } else if (status === "CANCELLED") {
+        // Notify patient
+        await createNotification({
+          userId: appointment.patientId,
+          type: "APPOINTMENT_CANCELLED",
+          title: "Appointment Cancelled",
+          message: `Your appointment with Dr. ${doctor?.name || "Doctor"} scheduled for ${new Date(appointment.scheduledAt).toLocaleString()} has been cancelled.${updated?.cancellationReason ? ` Reason: ${updated.cancellationReason}` : ""}`,
+          metadata: {
+            appointmentId: String(appointment._id),
+            doctorId: appointment.doctorId,
+            cancellationReason: updated?.cancellationReason,
+          },
+          channel: "PUSH",
+        });
+      } else if (status === "COMPLETED") {
+        // Notify patient
+        await createNotification({
+          userId: appointment.patientId,
+          type: "APPOINTMENT_COMPLETED",
+          title: "Appointment Completed",
+          message: `Your appointment with Dr. ${doctor?.name || "Doctor"} has been marked as completed.`,
+          metadata: {
+            appointmentId: String(appointment._id),
+            doctorId: appointment.doctorId,
+          },
+          channel: "PUSH",
+        });
+      }
+    } catch (error) {
+      console.error("Failed to create notifications for status update:", error);
+    }
+
     // Emit Socket.IO events for status update
     socketEvents.emitToUser(appointment.patientId, "appointment:statusUpdated", {
       appointmentId: String(appointment._id),
@@ -325,6 +514,21 @@ router.patch("/:id/status", validateRequired(["status"]), async (req: Request, r
       patientId: appointment.patientId,
       scheduledAt: appointment.scheduledAt,
     });
+    
+    // Emit notification events
+    if (status === "CONFIRMED") {
+      socketEvents.emitToUser(appointment.patientId, "notification:new", {
+        type: "APPOINTMENT_CONFIRMED",
+        title: "Appointment Confirmed",
+        message: `Your appointment has been confirmed.`,
+      });
+    } else if (status === "CANCELLED") {
+      socketEvents.emitToUser(appointment.patientId, "notification:new", {
+        type: "APPOINTMENT_CANCELLED",
+        title: "Appointment Cancelled",
+        message: `Your appointment has been cancelled.`,
+      });
+    }
     socketEvents.emitToAdmin("appointment:statusUpdated", {
       appointmentId: String(appointment._id),
       status,
@@ -372,14 +576,7 @@ router.patch("/:id/status", validateRequired(["status"]), async (req: Request, r
         const patient = await User.findById(appointment.patientId);
         const patientName = patient?.name || appointment.patientName || `Patient ${appointment.patientId.slice(-8)}`;
         
-        console.log("📝 Creating appointment history:", {
-          doctorId: appointment.doctorId,
-          patientId: appointment.patientId,
-          patientName,
-          appointmentId: String(appointment._id),
-        });
-        
-        const historyRecord = await createDoctorPatientHistory({
+        await createDoctorPatientHistory({
           doctorId: appointment.doctorId,
           patientId: appointment.patientId,
           patientName,
@@ -392,15 +589,8 @@ router.patch("/:id/status", validateRequired(["status"]), async (req: Request, r
             channel: appointment.channel,
           },
         });
-        
-        console.log("✅ Appointment history created:", historyRecord._id);
       } catch (historyError: any) {
-        console.error("❌ Failed to record appointment history:", historyError);
-        console.error("Error details:", {
-          message: historyError.message,
-          stack: historyError.stack,
-        });
-        // Don't fail the request if history recording fails
+        console.error("Failed to record appointment history:", historyError);
       }
     }
 
@@ -408,16 +598,16 @@ router.patch("/:id/status", validateRequired(["status"]), async (req: Request, r
     await createActivity(
       "APPOINTMENT_STATUS_UPDATED",
       "Appointment Status Updated",
-      `Appointment ${String(appointment._id)} status changed to ${status}`,
+      `Appointment ${String(updated!._id)} status changed to ${status}`,
       {
-        patientId: appointment.patientId,
-        doctorId: appointment.doctorId,
-        hospitalId: appointment.hospitalId,
-        metadata: { appointmentId: String(appointment._id), status },
+        patientId: updated!.patientId,
+        doctorId: updated!.doctorId,
+        hospitalId: updated!.hospitalId,
+        metadata: { appointmentId: String(updated!._id), status },
       }
     );
     
-    res.json(appointment);
+    res.json(updated);
   } catch (error: any) {
     if (error instanceof AppError) {
       res.status(error.status).json({ message: error.message });
@@ -449,6 +639,18 @@ router.patch("/:id/reschedule", validateRequired(["scheduledAt"]), async (req: R
 
     // Release old slot and book new slot
     const oldAppointment = await Appointment.findById(req.params.id);
+    if (!oldAppointment) {
+      throw new AppError("Appointment not found", 404);
+    }
+
+    // Check authorization - doctor can only reschedule their own appointments
+    const userId = (req as any).user?.sub;
+    const userRole = (req as any).user?.role;
+    const isAdmin = userRole === "SUPER_ADMIN" || userRole === "HOSPITAL_ADMIN";
+    
+    if (!isAdmin && oldAppointment.doctorId !== userId) {
+      throw new AppError("You can only reschedule your own appointments", 403);
+    }
     let newBookedSlot = null;
     if (oldAppointment) {
       try {
@@ -512,7 +714,21 @@ router.patch("/:id/cancel", validateRequired(["cancellationReason"]), async (req
       throw new AppError("Cancellation reason is required", 400);
     }
 
-    const appointment = await Appointment.findByIdAndUpdate(
+    const appointment = await Appointment.findById(req.params.id) as IAppointment | null;
+    if (!appointment) {
+      throw new AppError("Appointment not found", 404);
+    }
+
+    // Check authorization - doctor can only cancel their own appointments
+    const userId = (req as any).user?.sub;
+    const userRole = (req as any).user?.role;
+    const isAdmin = userRole === "SUPER_ADMIN" || userRole === "HOSPITAL_ADMIN";
+    
+    if (!isAdmin && appointment.doctorId !== userId) {
+      throw new AppError("You can only cancel your own appointments", 403);
+    }
+
+    const updated = await Appointment.findByIdAndUpdate(
       req.params.id,
       { 
         status: "CANCELLED",
@@ -522,20 +738,16 @@ router.patch("/:id/cancel", validateRequired(["cancellationReason"]), async (req
       { new: true }
     ) as IAppointment | null;
 
-    if (!appointment) {
-      throw new AppError("Appointment not found", 404);
-    }
-
     // Release slot when appointment is cancelled
     try {
-      await releaseSlot(appointment.doctorId, appointment.scheduledAt);
+      await releaseSlot(updated!.doctorId, updated!.scheduledAt);
     } catch (slotError: any) {
       console.warn("Failed to release slot:", slotError.message);
     }
 
     // End conversation if active
     const conversation = await Conversation.findOne({
-      appointmentId: String(appointment._id),
+      appointmentId: String(updated!._id),
       isActive: true,
     });
 
@@ -548,16 +760,16 @@ router.patch("/:id/cancel", validateRequired(["cancellationReason"]), async (req
     await createActivity(
       "APPOINTMENT_CANCELLED",
       "Appointment Cancelled",
-      `Appointment cancelled for Patient ${appointment.patientId}. Reason: ${cancellationReason}`,
+      `Appointment cancelled for Patient ${updated!.patientId}. Reason: ${cancellationReason}`,
       {
-        patientId: appointment.patientId,
-        doctorId: appointment.doctorId,
-        hospitalId: appointment.hospitalId,
-        metadata: { appointmentId: String(appointment._id), cancellationReason },
+        patientId: updated!.patientId,
+        doctorId: updated!.doctorId,
+        hospitalId: updated!.hospitalId,
+        metadata: { appointmentId: String(updated!._id), cancellationReason },
       }
     );
     
-    res.json(appointment);
+    res.json(updated);
   } catch (error: any) {
     if (error instanceof AppError) {
       res.status(error.status).json({ message: error.message });
@@ -677,7 +889,7 @@ router.get("/:id/report", async (req: Request, res: Response) => {
 });
 
 // Delete appointment (Patient can delete their own, Doctor/Admin can delete any)
-router.delete("/:id", async (req: Request, res: Response) => {
+router.delete("/:id", requireAuth, async (req: Request, res: Response) => {
   try {
     const appointmentId = req.params.id;
     console.log(`[DELETE] Attempting to delete appointment with ID: ${appointmentId}`);
@@ -702,6 +914,27 @@ router.delete("/:id", async (req: Request, res: Response) => {
       });
     }
 
+    // Check authorization - patients can only delete their own appointments
+    const userId = (req as any).user?.sub;
+    const userRole = (req as any).user?.role;
+    const isAdmin = userRole === "SUPER_ADMIN" || userRole === "HOSPITAL_ADMIN";
+    const isDoctor = userRole === "DOCTOR";
+    const isPatient = userRole === "PATIENT";
+    
+    if (isPatient && String(appointment.patientId) !== String(userId)) {
+      return res.status(403).json({ 
+        message: "You can only delete your own appointments",
+        error: "Unauthorized"
+      });
+    }
+    
+    if (isDoctor && String(appointment.doctorId) !== String(userId) && !isAdmin) {
+      return res.status(403).json({ 
+        message: "You can only delete your own appointments",
+        error: "Unauthorized"
+      });
+    }
+
     console.log(`[DELETE] Found appointment: ${String(appointment._id)}, Status: ${appointment.status}`);
 
     // Only allow deletion if appointment is PENDING or CANCELLED
@@ -718,37 +951,24 @@ router.delete("/:id", async (req: Request, res: Response) => {
     const appointmentIdStr = String(appointment._id);
     const appointmentObjectId = appointment._id as mongoose.Types.ObjectId;
 
-    console.log(`[DELETE] Starting deletion process for appointment: ${appointmentIdStr}`);
-
-    // 1. Delete related prescriptions
-    let prescriptionsCount = 0;
     try {
       const prescriptions = await Prescription.find({ appointmentId: appointmentIdStr });
-      prescriptionsCount = prescriptions.length;
       if (prescriptions.length > 0) {
-        const prescriptionDeleteResult = await Prescription.deleteMany({ appointmentId: appointmentIdStr });
-        console.log(`[DELETE] Deleted ${prescriptionDeleteResult.deletedCount} prescription(s)`);
+        await Prescription.deleteMany({ appointmentId: appointmentIdStr });
       }
     } catch (error: any) {
-      console.error("[DELETE] Error deleting prescriptions:", error.message);
-      // Continue with appointment deletion even if prescription deletion fails
+      console.error("Error deleting prescriptions:", error.message);
     }
 
-    // 2. Delete related conversations
-    let conversationsCount = 0;
     try {
       const conversations = await Conversation.find({ appointmentId: appointmentIdStr });
-      conversationsCount = conversations.length;
       if (conversations.length > 0) {
-        const conversationDeleteResult = await Conversation.deleteMany({ appointmentId: appointmentIdStr });
-        console.log(`[DELETE] Deleted ${conversationDeleteResult.deletedCount} conversation(s)`);
+        await Conversation.deleteMany({ appointmentId: appointmentIdStr });
       }
     } catch (error: any) {
-      console.error("[DELETE] Error deleting conversations:", error.message);
-      // Continue with appointment deletion even if conversation deletion fails
+      console.error("Error deleting conversations:", error.message);
     }
 
-    // 3. Delete report file if exists
     if (reportFile) {
       try {
         let filePath: string;
@@ -759,7 +979,6 @@ router.delete("/:id", async (req: Request, res: Response) => {
             filePath = path.join(process.cwd(), reportFile.replace(/^\//, ""));
           } else {
             filePath = path.join(process.cwd(), "uploads/reports", path.basename(reportFile));
-            // Also try the old path format
             if (!fs.existsSync(filePath)) {
               filePath = path.join(__dirname, "../../", reportFile);
             }
@@ -768,88 +987,58 @@ router.delete("/:id", async (req: Request, res: Response) => {
 
         if (fs.existsSync(filePath)) {
           fs.unlinkSync(filePath);
-          console.log(`[DELETE] Deleted report file: ${filePath}`);
-        } else {
-          console.warn(`[DELETE] Report file not found at path: ${filePath}`);
         }
       } catch (error: any) {
-        console.error("[DELETE] Failed to delete report file:", error.message);
-        // Continue with deletion even if file deletion fails
+        console.error("Failed to delete report file:", error.message);
       }
     }
 
-    // 4. Delete the appointment from database - Simplified and more reliable approach
-    console.log(`[DELETE] Attempting to delete appointment with ObjectId: ${appointmentObjectId}`);
-    console.log(`[DELETE] Appointment ID string: ${appointmentIdStr}`);
-    
     let deleteResult: any = null;
     let deleted = false;
     
-    // PRIMARY METHOD: Use findByIdAndDelete (simplest and most reliable)
     try {
       const deletedDoc = await Appointment.findByIdAndDelete(appointmentObjectId);
       if (deletedDoc) {
         deleted = true;
         deleteResult = { deletedCount: 1, acknowledged: true };
-        console.log(`[DELETE] ✅ Document deleted successfully via findByIdAndDelete`);
       }
     } catch (error: any) {
-      console.error(`[DELETE] findByIdAndDelete failed:`, error.message);
+      console.error("findByIdAndDelete failed:", error.message);
     }
     
-    // FALLBACK METHOD 1: Try deleteOne with ObjectId
     if (!deleted) {
       try {
         deleteResult = await Appointment.deleteOne({ _id: appointmentObjectId });
-        console.log(`[DELETE] Mongoose deleteOne result:`, {
-          deletedCount: deleteResult.deletedCount,
-          acknowledged: deleteResult.acknowledged
-        });
         if (deleteResult.deletedCount > 0) {
           deleted = true;
-          console.log(`[DELETE] ✅ Document deleted successfully via Mongoose deleteOne`);
         }
       } catch (error: any) {
-        console.error(`[DELETE] Mongoose deleteOne failed:`, error.message);
+        console.error("deleteOne failed:", error.message);
       }
     }
     
-    // FALLBACK METHOD 2: Use native MongoDB collection (bypasses Mongoose)
     if (!deleted) {
       try {
         const objectId = new mongoose.Types.ObjectId(appointmentId);
         deleteResult = await Appointment.collection.deleteOne({ _id: objectId });
-        console.log(`[DELETE] Collection.deleteOne result:`, {
-          deletedCount: deleteResult.deletedCount,
-          acknowledged: deleteResult.acknowledged
-        });
         if (deleteResult.deletedCount > 0) {
           deleted = true;
-          console.log(`[DELETE] ✅ Document deleted successfully via collection.deleteOne`);
         }
       } catch (error: any) {
-        console.error(`[DELETE] Collection.deleteOne failed:`, error.message);
+        console.error("Collection deleteOne failed:", error.message);
       }
     }
     
-    // FINAL VERIFICATION: Check if document still exists
     if (deleted && deleteResult && deleteResult.deletedCount > 0) {
-      // Wait a moment for database to sync
       await new Promise(resolve => setTimeout(resolve, 100));
       
-      // Verify deletion by querying the database
       const verifyDelete = await Appointment.findById(appointmentObjectId);
       if (verifyDelete) {
-        console.error(`[DELETE] ⚠️ WARNING: Document still exists after deletion! Retrying...`);
-        
-        // Retry with native collection delete
         try {
           const objectId = new mongoose.Types.ObjectId(appointmentId);
           const retryResult = await Appointment.collection.deleteOne({ _id: objectId });
-          console.log(`[DELETE] Retry delete result:`, retryResult);
           
           if (retryResult.deletedCount === 0) {
-            console.error(`[DELETE] ❌ FAILED: Document still exists after retry`);
             return res.status(500).json({ 
               message: "Appointment deletion failed - document still exists in database",
               error: "Deletion verification failed",
@@ -857,22 +1046,17 @@ router.delete("/:id", async (req: Request, res: Response) => {
             });
           }
         } catch (error: any) {
-          console.error(`[DELETE] Retry delete failed:`, error.message);
+          console.error("Retry delete failed:", error.message);
           return res.status(500).json({ 
             message: "Appointment deletion verification failed: " + error.message,
             error: "Verification error",
             appointmentId: appointmentIdStr
           });
         }
-      } else {
-        console.log(`[DELETE] ✅ Verification passed - appointment is completely deleted`);
       }
     } else {
-      // Check if document actually exists
       const checkExists = await Appointment.findById(appointmentObjectId);
       if (!checkExists) {
-        // Document doesn't exist, so deletion is successful
-        console.log(`[DELETE] ✅ Document does not exist - considered deleted`);
         deleted = true;
         deleteResult = { deletedCount: 1, acknowledged: true };
       } else {

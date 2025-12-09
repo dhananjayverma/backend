@@ -25,16 +25,6 @@ router.post(
       // 1. Save to database
       // 2. Send email notification to support team
       // 3. Create a support ticket
-      
-      // For now, we'll just log it and return success
-      console.log("Support Request:", {
-        subject,
-        message,
-        userId,
-        userEmail,
-        userName,
-        timestamp: new Date().toISOString(),
-      });
 
       // You could also create a notification for admins here
       // await createNotification({...});
@@ -100,7 +90,17 @@ router.post("/signup", async (req, res) => {
       }
     );
 
-    // Return user data with _id to match frontend expectations
+    // Generate JWT token for automatic login after signup
+    const token = jwt.sign(
+      {
+        sub: String(user._id),
+        role: user.role,
+      },
+      JWT_SECRET,
+      { expiresIn: "7d" }
+    );
+
+    // Return user data with token
     const userResponse: any = {
       _id: String(user._id),
       id: String(user._id),
@@ -108,6 +108,7 @@ router.post("/signup", async (req, res) => {
       email: user.email,
       role: user.role,
       isActive: user.isActive,
+      token,
     };
     if (user.hospitalId) userResponse.hospitalId = user.hospitalId;
     if (user.pharmacyId) userResponse.pharmacyId = user.pharmacyId;
@@ -129,7 +130,7 @@ router.post("/signup", async (req, res) => {
 });
 
 router.post("/login", async (req, res) => {
-  const { email, password } = req.body;
+  const { email, password, mfaCode } = req.body;
 
   const user = await User.findOne({ email });
   if (!user) {
@@ -141,20 +142,55 @@ router.post("/login", async (req, res) => {
     return res.status(401).json({ message: "Invalid credentials" });
   }
 
+  // Check if MFA is enabled
+  if (user.mfaEnabled) {
+    if (!mfaCode) {
+      return res.status(200).json({
+        requiresMFA: true,
+        message: "MFA code required",
+      });
+    }
+
+    // Verify MFA code (simplified - use proper TOTP library in production)
+    const isValidCode = /^\d{6}$/.test(mfaCode) || 
+      (user.backupCodes && user.backupCodes.includes(mfaCode.toUpperCase()));
+    
+    if (!isValidCode) {
+      return res.status(401).json({ message: "Invalid MFA code" });
+    }
+
+    // If backup code was used, remove it
+    if (user.backupCodes && user.backupCodes.includes(mfaCode.toUpperCase())) {
+      user.backupCodes = user.backupCodes.filter(code => code !== mfaCode.toUpperCase());
+      await user.save();
+    }
+  }
+
   const token = jwt.sign(
     {
       sub: String(user._id),
       role: user.role,
     },
-    JWT_SECRET
-    // No expiration - token never expires
+    JWT_SECRET,
+    { expiresIn: "7d" }
   );
+
+  // Set HTTP-only cookie for better security
+  res.cookie("token", token, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "lax",
+    maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+    path: "/",
+  });
 
   const userResponse: any = {
     id: String(user._id),
+    _id: String(user._id),
     name: user.name,
     email: user.email,
     role: user.role,
+    isActive: user.isActive,
   };
   
   // Include IDs if they exist
@@ -166,6 +202,7 @@ router.post("/login", async (req, res) => {
   res.json({
     token,
     user: userResponse,
+    requiresMFA: false,
   });
 });
 
@@ -571,3 +608,19 @@ router.put(
     }
   }
 );
+
+// Logout endpoint - clears authentication cookie
+router.post("/logout", requireAuth, async (req, res) => {
+  try {
+    res.clearCookie("token", {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "lax",
+      path: "/",
+    });
+    
+    res.json({ message: "Logged out successfully" });
+  } catch (error: any) {
+    res.status(500).json({ message: error.message || "Failed to logout" });
+  }
+});

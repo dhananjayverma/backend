@@ -24,15 +24,30 @@ export async function generateSlotsForDate(
   const dayOfWeek = dayMap[dayOfWeekNum] as IDoctorSchedule["dayOfWeek"];
 
   // Find doctor's schedule for this day
-  const schedule = await DoctorSchedule.findOne({
+  // If hospitalId is provided, match schedules with that hospitalId or no hospitalId
+  // If no hospitalId, match any schedule
+  const scheduleFilter: any = {
     doctorId,
     dayOfWeek,
     isActive: true,
-  });
+  };
+
+  if (hospitalId) {
+    scheduleFilter.$or = [
+      { hospitalId: hospitalId },
+      { hospitalId: { $exists: false } },
+      { hospitalId: null },
+    ];
+  }
+
+  const schedule = await DoctorSchedule.findOne(scheduleFilter);
 
   if (!schedule) {
+    console.log(`[Slots] No schedule found for doctorId: ${doctorId}, dayOfWeek: ${dayOfWeek}, hospitalId: ${hospitalId || 'none'}`);
     return []; // No schedule for this day
   }
+
+  console.log(`[Slots] Found schedule for doctorId: ${doctorId}, dayOfWeek: ${dayOfWeek}, startTime: ${schedule.startTime}, endTime: ${schedule.endTime}`);
 
   // Parse start and end times
   const [startHour, startMinute] = schedule.startTime.split(":").map(Number);
@@ -131,6 +146,11 @@ export async function getAvailableSlots(
   const nextDay = new Date(slotDate);
   nextDay.setDate(nextDay.getDate() + 1);
 
+  // Build hospitalId filter: match specific hospitalId OR slots without hospitalId (general slots)
+  const hospitalFilter: any = hospitalId 
+    ? { $or: [{ hospitalId: hospitalId }, { hospitalId: { $exists: false } }, { hospitalId: null }] }
+    : {};
+
   const slots = await Slot.find({
     doctorId,
     date: {
@@ -138,7 +158,7 @@ export async function getAvailableSlots(
       $lt: nextDay,
     },
     isBlocked: false,
-    hospitalId: hospitalId || { $exists: false },
+    ...hospitalFilter,
   }).sort({ startTime: 1 });
 
   // Filter out fully booked slots and update booking status
@@ -181,26 +201,33 @@ export async function bookSlot(
   hospitalId?: string
 ): Promise<ISlot | null> {
   // Find slot that contains this startTime
+  // Build hospitalId filter: match specific hospitalId OR slots without hospitalId (general slots)
+  const hospitalFilter: any = hospitalId 
+    ? { $or: [{ hospitalId: hospitalId }, { hospitalId: { $exists: false } }, { hospitalId: null }] }
+    : {};
+
   const slot = await Slot.findOne({
     doctorId,
     startTime: { $lte: startTime },
     endTime: { $gt: startTime },
     isBlocked: false,
-    hospitalId: hospitalId || { $exists: false },
+    ...hospitalFilter,
   });
 
   if (!slot) {
     // Slot doesn't exist - might need to generate it first
     // Try to generate slots for this date
-    const slotDate = new Date(normalizedTime);
+    const slotDate = new Date(startTime);
     slotDate.setHours(0, 0, 0, 0);
     await generateSlotsForDate(doctorId, slotDate, hospitalId);
     
-    // Try to find again
+    // Try to find again with the same query
     const newSlot = await Slot.findOne({
       doctorId,
-      startTime: normalizedTime,
+      startTime: { $lte: startTime },
+      endTime: { $gt: startTime },
       isBlocked: false,
+      ...hospitalFilter,
     });
 
     if (!newSlot || newSlot.isBooked || newSlot.bookedCount >= newSlot.maxBookings) {

@@ -3,7 +3,9 @@ import { Prescription, IPrescription } from "./prescription.model";
 import { createActivity } from "../activity/activity.service";
 import { validateRequired } from "../shared/middleware/validation";
 import { AppError } from "../shared/middleware/errorHandler";
+import { requireAuth } from "../shared/middleware/auth";
 import { socketEvents } from "../socket/socket.server";
+import { createNotification } from "../notifications/notification.service";
 import { createDoctorPatientHistory } from "../doctorHistory/doctorHistory.service";
 // Import model to ensure it's initialized
 import "../doctorHistory/doctorHistory.model";
@@ -193,16 +195,8 @@ router.post(
       const patient = await User.findById(prescription.patientId);
       const patientName = patient?.name || `Patient ${prescription.patientId.slice(-8)}`;
 
-      // Record in doctor-patient history
       try {
-        console.log("📝 Creating doctor-patient history for prescription:", {
-          doctorId: prescription.doctorId,
-          patientId: prescription.patientId,
-          patientName,
-          prescriptionId: getPrescriptionId(prescription),
-        });
-        
-        const historyRecord = await createDoctorPatientHistory({
+        await createDoctorPatientHistory({
           doctorId: prescription.doctorId,
           patientId: prescription.patientId,
           patientName,
@@ -216,16 +210,8 @@ router.post(
             reportStatus: prescription.reportStatus,
           },
         });
-        
-        console.log("✅ Doctor-patient history created successfully:", historyRecord._id);
       } catch (historyError: any) {
-        console.error("❌ Failed to record prescription history:", historyError);
-        console.error("Error details:", {
-          message: historyError.message,
-          stack: historyError.stack,
-          name: historyError.name,
-        });
-        // Don't fail the request if history recording fails
+        console.error("Failed to record prescription history:", historyError);
       }
 
       await createActivity(
@@ -244,6 +230,26 @@ router.post(
         }
       );
 
+      // Create notification for patient
+      try {
+        const doctor = await User.findById(prescription.doctorId);
+        await createNotification({
+          userId: prescription.patientId,
+          type: "PRESCRIPTION_CREATED",
+          title: "Prescription Ready",
+          message: `Your prescription from Dr. ${doctor?.name || "Doctor"} is ready. ${prescription.items.length} medicine(s) prescribed.`,
+          metadata: {
+            prescriptionId: getPrescriptionId(prescription),
+            appointmentId: prescription.appointmentId,
+            doctorId: prescription.doctorId,
+            itemCount: prescription.items.length,
+          },
+          channel: "PUSH",
+        });
+      } catch (error) {
+        console.error("Failed to create notification for patient:", error);
+      }
+
       const createdAt = getCreatedAt(prescription);
       socketEvents.emitToUser(prescription.patientId, "prescription:created", {
         prescriptionId: getPrescriptionId(prescription),
@@ -251,6 +257,14 @@ router.post(
         itemCount: prescription.items.length,
         createdAt,
       });
+      
+      // Emit notification event
+      socketEvents.emitToUser(prescription.patientId, "notification:new", {
+        type: "PRESCRIPTION_CREATED",
+        title: "Prescription Ready",
+        message: `Your prescription is ready with ${prescription.items.length} medicine(s).`,
+      });
+      
       socketEvents.emitToAdmin("prescription:created", {
         prescriptionId: getPrescriptionId(prescription),
         patientId: prescription.patientId,
@@ -429,7 +443,7 @@ router.put("/:id", validateRequired(["items"]), async (req: Request, res: Respon
 });
 
 // Generate prescription document using template
-router.get("/:id/document", async (req: Request, res: Response) => {
+router.get("/:id/document", requireAuth, async (req: Request, res: Response) => {
   try {
     const { hospitalId } = req.query;
     const prescription = await Prescription.findById(req.params.id) as IPrescription | null;
@@ -437,21 +451,181 @@ router.get("/:id/document", async (req: Request, res: Response) => {
       throw new AppError("Prescription not found", 404);
     }
 
+    // Check authorization - patients can only access their own prescriptions
+    const userId = (req as any).user?.sub;
+    const userRole = (req as any).user?.role;
+    const isAdmin = userRole === "SUPER_ADMIN" || userRole === "HOSPITAL_ADMIN";
+    const isDoctor = userRole === "DOCTOR";
+    const isPatient = userRole === "PATIENT";
+    
+    if (isPatient && String(prescription.patientId) !== String(userId)) {
+      throw new AppError("You can only access your own prescriptions", 403);
+    }
+    
+    if (isDoctor && String(prescription.doctorId) !== String(userId) && !isAdmin) {
+      throw new AppError("You can only access prescriptions you created", 403);
+    }
+
     const { doctor, patient, hospital } = await fetchTemplateData(prescription, hospitalId as string);
 
     const { Template } = await import("../template/template.model");
     const templateHospitalId = hospital ? String(hospital._id) : (hospitalId as string);
-    const template = await Template.findOne({
-      type: "PRESCRIPTION",
-      isActive: true,
-      isDefault: true,
-      $or: templateHospitalId
-        ? [{ hospitalId: templateHospitalId }, { hospitalId: null }]
-        : [{ hospitalId: null }],
-    }).sort({ hospitalId: -1 });
-
+    
+    // Try to find template with better fallback logic (same as generate-report endpoint)
+    let template = null;
+    
+    console.log(`[Template Search] Looking for PRESCRIPTION template, hospitalId: ${templateHospitalId || "none"}`);
+    
+    // Strategy: Try multiple queries with fallback, prioritizing:
+    // 1. Hospital-specific default
+    // 2. Hospital-specific any
+    // 3. Global default
+    // 4. Global any
+    // 5. Any PRESCRIPTION template
+    
+    // First, try to find default template for hospital
+    if (templateHospitalId) {
+      template = await Template.findOne({
+        type: "PRESCRIPTION",
+        isActive: { $ne: false },
+        isDefault: true,
+        hospitalId: templateHospitalId,
+      }).sort({ createdAt: -1 });
+      console.log(`[Template Search] Hospital default: ${template ? "Found" : "Not found"}`);
+    }
+    
+    // If not found, try hospital-specific template (any active, prefer default)
+    if (!template && templateHospitalId) {
+      template = await Template.findOne({
+        type: "PRESCRIPTION",
+        isActive: { $ne: false },
+        hospitalId: templateHospitalId,
+      }).sort({ isDefault: -1, createdAt: -1 });
+      console.log(`[Template Search] Hospital any: ${template ? "Found" : "Not found"}`);
+    }
+    
+    // If still not found, try global default template
     if (!template) {
-      return res.status(404).json({ message: "No template found" });
+      template = await Template.findOne({
+        type: "PRESCRIPTION",
+        isActive: { $ne: false },
+        isDefault: true,
+        $or: [{ hospitalId: null }, { hospitalId: { $exists: false } }],
+      }).sort({ createdAt: -1 });
+      console.log(`[Template Search] Global default: ${template ? "Found" : "Not found"}`);
+    }
+    
+    // If still not found, try any global template
+    if (!template) {
+      template = await Template.findOne({
+        type: "PRESCRIPTION",
+        isActive: { $ne: false },
+        $or: [{ hospitalId: null }, { hospitalId: { $exists: false } }],
+      }).sort({ isDefault: -1, createdAt: -1 });
+      console.log(`[Template Search] Global any: ${template ? "Found" : "Not found"}`);
+    }
+    
+    // If still no template, try any PRESCRIPTION template (most permissive)
+    if (!template) {
+      template = await Template.findOne({
+        type: "PRESCRIPTION",
+        isActive: { $ne: false },
+      }).sort({ isDefault: -1, createdAt: -1 });
+      console.log(`[Template Search] Any PRESCRIPTION: ${template ? "Found" : "Not found"}`);
+    }
+    
+    // Last resort: try any template regardless of isActive
+    if (!template) {
+      template = await Template.findOne({
+        type: "PRESCRIPTION",
+      }).sort({ isDefault: -1, createdAt: -1 });
+      console.log(`[Template Search] Any (ignore isActive): ${template ? "Found" : "Not found"}`);
+    }
+    
+    // If no template exists at all, create a default one automatically
+    if (!template) {
+      const defaultTemplateContent = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <style>
+    body { font-family: Arial, sans-serif; padding: 20px; line-height: 1.6; color: #000; max-width: 800px; margin: 0 auto; }
+    .header { text-align: center; margin-bottom: 30px; padding-bottom: 20px; border-bottom: 2px solid #2563eb; }
+    .hospital-name { font-size: 24px; font-weight: bold; margin-bottom: 10px; color: #1e40af; }
+    .patient-info, .doctor-info { margin-bottom: 20px; background: #f8fafc; padding: 15px; border-radius: 8px; }
+    .info-row { margin: 8px 0; }
+    .info-label { font-weight: bold; color: #1e40af; display: inline-block; width: 120px; }
+    .medicines-table { width: 100%; border-collapse: collapse; margin: 20px 0; }
+    .medicines-table th { background: #1e293b; color: white; padding: 12px; text-align: left; border: 1px solid #334155; }
+    .medicines-table td { padding: 10px; border: 1px solid #334155; }
+    .medicines-table tr:nth-child(even) { background: #f1f5f9; }
+    .notes { margin-top: 20px; padding: 15px; background: #fef3c7; border-left: 4px solid #f59e0b; border-radius: 4px; }
+    .footer { margin-top: 30px; padding-top: 20px; border-top: 1px solid #e5e7eb; text-align: center; color: #6b7280; font-size: 12px; }
+    .date-time { color: #6b7280; font-size: 14px; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="hospital-name">{{hospitalName}}</div>
+    <div style="color: #6b7280;">{{hospitalAddress}}</div>
+    <div style="color: #6b7280;">Phone: {{hospitalPhone}}</div>
+  </div>
+
+  <div class="patient-info">
+    <h3 style="margin-top: 0; color: #1e40af;">Patient Information</h3>
+    <div class="info-row">
+      <span class="info-label">Name:</span>
+      <span>{{patientName}}</span>
+    </div>
+    <div class="info-row">
+      <span class="info-label">Patient ID:</span>
+      <span>{{patientId}}</span>
+    </div>
+  </div>
+
+  <div class="doctor-info">
+    <h3 style="margin-top: 0; color: #1e40af;">Doctor Information</h3>
+    <div class="info-row">
+      <span class="info-label">Doctor:</span>
+      <span>{{doctorName}}</span>
+    </div>
+    <div class="info-row">
+      <span class="info-label">Date:</span>
+      <span>{{date}}</span>
+    </div>
+    <div class="info-row">
+      <span class="info-label">Time:</span>
+      <span>{{time}}</span>
+    </div>
+  </div>
+
+  <h3 style="color: #1e40af; margin-top: 30px;">Prescribed Medicines</h3>
+  {{medicines}}
+
+  {{notesSection}}
+
+  <div class="footer">
+    <p>{{footerText}}</p>
+    <p class="date-time">Prescription ID: {{prescriptionId}} | Generated on {{date}} at {{time}}</p>
+  </div>
+</body>
+</html>`;
+
+      template = await Template.create({
+        name: "Default Prescription Template",
+        type: "PRESCRIPTION",
+        hospitalId: null,
+        content: defaultTemplateContent,
+        variables: [
+          { key: "hospitalName", label: "Hospital Name", required: true },
+          { key: "patientName", label: "Patient Name", required: true },
+          { key: "doctorName", label: "Doctor Name", required: true },
+          { key: "medicines", label: "Medicines Table", required: true },
+        ],
+        footerText: "This is a computer-generated prescription. Please follow doctor's instructions carefully.",
+        isDefault: true,
+        isActive: true,
+      });
     }
 
     const templateData = prepareTemplateData(prescription, hospital, doctor, patient, template);
@@ -635,11 +809,26 @@ router.post("/:id/generate-report", async (req: Request, res: Response) => {
 });
 
 // Delete prescription (Admin only)
-router.delete("/:id", async (req: Request, res: Response) => {
+router.delete("/:id", requireAuth, async (req: Request, res: Response) => {
   try {
     const prescription = await Prescription.findById(req.params.id) as IPrescription | null;
     if (!prescription) {
       throw new AppError("Prescription not found", 404);
+    }
+
+    // Check authorization - patients can only delete their own prescriptions
+    const userId = (req as any).user?.sub;
+    const userRole = (req as any).user?.role;
+    const isAdmin = userRole === "SUPER_ADMIN" || userRole === "HOSPITAL_ADMIN";
+    const isDoctor = userRole === "DOCTOR";
+    const isPatient = userRole === "PATIENT";
+    
+    if (isPatient && String(prescription.patientId) !== String(userId)) {
+      throw new AppError("You can only delete your own prescriptions", 403);
+    }
+    
+    if (isDoctor && String(prescription.doctorId) !== String(userId) && !isAdmin) {
+      throw new AppError("You can only delete prescriptions you created", 403);
     }
 
     await Prescription.findByIdAndDelete(req.params.id);

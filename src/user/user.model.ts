@@ -29,12 +29,14 @@ export interface IUser extends Document {
   mfaEnabled?: boolean;
   mfaSecret?: string; // TOTP secret for 2FA
   backupCodes?: string[]; // Backup codes for MFA
+  createdAt?: Date;
+  updatedAt?: Date;
 }
 
 const UserSchema = new Schema<IUser>(
   {
     name: { type: String, required: true },
-    email: { type: String, required: true, unique: true, index: true },
+    email: { type: String, required: true, unique: true },
     phone: { type: String },
     passwordHash: { type: String, required: true },
     role: {
@@ -64,7 +66,6 @@ const UserSchema = new Schema<IUser>(
   { timestamps: true }
 );
 
-// Text search index for full-text search
-UserSchema.index({ name: "text", email: "text" });
+UserSchema.index({ name: "text" });
 
 export const User: Model<IUser> = mongoose.models.User || mongoose.model<IUser>("User", UserSchema);

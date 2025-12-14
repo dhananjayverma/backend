@@ -152,7 +152,7 @@ export class IndexService {
     console.log("📊 Creating database indexes...");
 
     try {
-      await this.createIndex(User.collection, { name: "text", email: "text" });
+      await this.createIndex(User.collection, { name: "text" });
       await this.createIndex(User.collection, { role: 1, isActive: 1 });
       await this.createIndex(User.collection, { hospitalId: 1 });
       await this.createIndex(User.collection, { pharmacyId: 1 });

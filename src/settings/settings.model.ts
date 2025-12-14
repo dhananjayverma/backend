@@ -34,43 +34,45 @@ export interface ISettings extends Document {
   updatedAt: Date;
 }
 
-const SettingsSchema = new Schema<ISettings>(
-  {
-    userId: { type: String, index: true },
-    
-    // General Settings
-    timezone: { type: String, default: "Asia/Kolkata" },
-    language: { type: String, default: "en" },
-    dateFormat: { type: String, default: "DD/MM/YYYY" },
-    
-    // Security Settings
-    sessionTimeout: { type: Number, default: 30 },
-    passwordMinLength: { type: Number, default: 8 },
-    passwordRequireUppercase: { type: Boolean, default: true },
-    passwordRequireNumbers: { type: Boolean, default: true },
-    
-    // Notification Settings
-    emailNotifications: { type: Boolean, default: true },
-    orderAlerts: { type: Boolean, default: true },
-    inventoryAlerts: { type: Boolean, default: true },
-    appointmentAlerts: { type: Boolean, default: true },
-    
-    // Appearance Settings
-    theme: { type: String, default: "light" },
-    primaryColor: { type: String, default: "#1e40af" },
-    secondaryColor: { type: String, default: "#059669" },
-    sidebarCollapsed: { type: Boolean, default: false },
-    
-    // System Settings
-    autoBackup: { type: Boolean, default: true },
-    backupFrequency: { type: String, default: "daily" },
-  },
-  { timestamps: true }
-);
+if (!mongoose.models.Settings) {
+  const SettingsSchema = new Schema<ISettings>(
+    {
+      userId: { type: String },
+      
+      // General Settings
+      timezone: { type: String, default: "Asia/Kolkata" },
+      language: { type: String, default: "en" },
+      dateFormat: { type: String, default: "DD/MM/YYYY" },
+      
+      // Security Settings
+      sessionTimeout: { type: Number, default: 30 },
+      passwordMinLength: { type: Number, default: 8 },
+      passwordRequireUppercase: { type: Boolean, default: true },
+      passwordRequireNumbers: { type: Boolean, default: true },
+      
+      // Notification Settings
+      emailNotifications: { type: Boolean, default: true },
+      orderAlerts: { type: Boolean, default: true },
+      inventoryAlerts: { type: Boolean, default: true },
+      appointmentAlerts: { type: Boolean, default: true },
+      
+      // Appearance Settings
+      theme: { type: String, default: "light" },
+      primaryColor: { type: String, default: "#1e40af" },
+      secondaryColor: { type: String, default: "#059669" },
+      sidebarCollapsed: { type: Boolean, default: false },
+      
+      // System Settings
+      autoBackup: { type: Boolean, default: true },
+      backupFrequency: { type: String, default: "daily" },
+    },
+    { timestamps: true }
+  );
 
-// Create unique index on userId to ensure one settings per user
-SettingsSchema.index({ userId: 1 }, { unique: true, sparse: true });
+  SettingsSchema.index({ userId: 1 }, { unique: true, sparse: true });
 
-export const Settings: Model<ISettings> =
-  mongoose.models.Settings || mongoose.model<ISettings>("Settings", SettingsSchema);
+  mongoose.model<ISettings>("Settings", SettingsSchema);
+}
+
+export const Settings: Model<ISettings> = mongoose.models.Settings;
 

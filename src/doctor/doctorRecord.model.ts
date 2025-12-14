@@ -34,7 +34,7 @@ const DoctorRecordSchema = new Schema<IDoctorRecord>(
   {
     doctorId: { type: String, required: true, unique: true, index: true },
     name: { type: String, required: true },
-    email: { type: String, required: true, index: true },
+    email: { type: String, required: true },
     phone: { type: String },
     specialization: { type: String, required: true, index: true },
     qualification: { type: String },

@@ -63,7 +63,8 @@ export async function getDoctorPatientHistory(
   return await DoctorPatientHistory.find(query)
     .sort({ createdAt: -1 })
     .limit(limit)
-    .lean();
+    .lean()
+    .exec() as unknown as IDoctorPatientHistory[];
 }
 
 export async function getDoctorPatientCount(doctorId: string): Promise<number> {
@@ -106,6 +107,7 @@ export async function getPatientHistoryByDoctor(
 ): Promise<IDoctorPatientHistory[]> {
   return await DoctorPatientHistory.find({ doctorId, patientId })
     .sort({ createdAt: -1 })
-    .lean();
+    .lean()
+    .exec() as unknown as IDoctorPatientHistory[];
 }
 

@@ -113,8 +113,10 @@ export function initializeSocket(server: HTTPServer): SocketIOServer {
       log(`✅ User ${userId} marked as online (${onlineUsers.get(userId)!.size} socket(s))`);
       
       // Notify admin panel that user is online
-      io.to("admin").emit("user:online", { userId });
-      io.to("admin").emit("users:status", { onlineUsers: getOnlineUsers() });
+      if (io) {
+        io.to("admin").emit("user:online", { userId });
+        io.to("admin").emit("users:status", { onlineUsers: getOnlineUsers() });
+      }
     }
 
     // Join user-specific room
@@ -154,8 +156,10 @@ export function initializeSocket(server: HTTPServer): SocketIOServer {
         log(`✅ User ${targetUserId} explicitly marked as online via event`);
         
         // Notify admin panel
-        io.to("admin").emit("user:online", { userId: targetUserId });
-        io.to("admin").emit("users:status", { onlineUsers: getOnlineUsers() });
+        if (io) {
+          io.to("admin").emit("user:online", { userId: targetUserId });
+          io.to("admin").emit("users:status", { onlineUsers: getOnlineUsers() });
+        }
       }
     });
 
@@ -169,8 +173,10 @@ export function initializeSocket(server: HTTPServer): SocketIOServer {
           log(`❌ User ${targetUserId} marked as offline (no more sockets)`);
           
           // Notify admin panel
-          io.to("admin").emit("user:offline", { userId: targetUserId });
-          io.to("admin").emit("users:status", { onlineUsers: getOnlineUsers() });
+          if (io) {
+            io.to("admin").emit("user:offline", { userId: targetUserId });
+            io.to("admin").emit("users:status", { onlineUsers: getOnlineUsers() });
+          }
         } else {
           log(`⚠️ User ${targetUserId} still has ${onlineUsers.get(targetUserId)!.size} socket(s) connected`);
         }
@@ -189,8 +195,10 @@ export function initializeSocket(server: HTTPServer): SocketIOServer {
           log(`❌ User ${userId} marked as offline (disconnected)`);
           
           // Notify admin panel
-          io.to("admin").emit("user:offline", { userId });
-          io.to("admin").emit("users:status", { onlineUsers: getOnlineUsers() });
+          if (io) {
+            io.to("admin").emit("user:offline", { userId });
+            io.to("admin").emit("users:status", { onlineUsers: getOnlineUsers() });
+          }
         }
       }
     });

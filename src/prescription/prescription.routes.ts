@@ -81,7 +81,7 @@ const renderTemplate = (template: any, templateData: Record<string, string>): st
   });
 
   // Handle simple conditionals like {{#if notes}}...{{/if}}
-  rendered = rendered.replace(/\{\{#if\s+(\w+)\}\}([\s\S]*?)\{\{\/if\}\}/g, (match, key, content) => {
+  rendered = rendered.replace(/\{\{#if\s+(\w+)\}\}([\s\S]*?)\{\{\/if\}\}/g, (match: string, key: string, content: string) => {
     return templateData[key] ? content : '';
   });
 

@@ -42,5 +42,6 @@ export async function getRecentActivities(limit: number = DEFAULT_ACTIVITY_LIMIT
   return Activity.find()
     .sort({ createdAt: -1 })
     .limit(limit)
-    .lean() as Promise<IActivity[]>;
+    .lean()
+    .exec() as unknown as Promise<IActivity[]>;
 }

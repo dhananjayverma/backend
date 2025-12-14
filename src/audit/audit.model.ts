@@ -7,17 +7,23 @@ export interface IAuditLog extends Document {
   body: any;
 }
 
-const AuditSchema = new Schema<IAuditLog>(
-  {
-    userId: { type: String, index: true },
-    method: { type: String, required: true },
-    path: { type: String, required: true, index: true },
-    body: { type: Schema.Types.Mixed },
-  },
-  { timestamps: true }
-);
+if (!mongoose.models.AuditLog) {
+  const AuditSchema = new Schema<IAuditLog>(
+    {
+      userId: { type: String },
+      method: { type: String, required: true },
+      path: { type: String, required: true },
+      body: { type: Schema.Types.Mixed },
+    },
+    { timestamps: true }
+  );
 
-export const AuditLog: Model<IAuditLog> =
-  mongoose.models.AuditLog || mongoose.model<IAuditLog>("AuditLog", AuditSchema);
+  AuditSchema.index({ userId: 1 });
+  AuditSchema.index({ path: 1 });
+
+  mongoose.model<IAuditLog>("AuditLog", AuditSchema);
+}
+
+export const AuditLog: Model<IAuditLog> = mongoose.models.AuditLog;
 
 

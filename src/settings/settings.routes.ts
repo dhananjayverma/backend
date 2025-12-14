@@ -20,7 +20,9 @@ router.get("/", requireAuth, async (req: Request, res: Response) => {
     }
     
     const settingsObj = settings.toObject();
-    delete settingsObj.__v;
+    if ('__v' in settingsObj) {
+      delete (settingsObj as any).__v;
+    }
     res.json(settingsObj);
   } catch (error: any) {
     console.error("Error fetching settings:", error);
@@ -34,11 +36,11 @@ router.put("/", requireAuth, async (req: Request, res: Response) => {
     const userId = req.user?.sub;
     const updateData = req.body;
     
-    delete updateData.userId;
-    delete updateData._id;
-    delete updateData.createdAt;
-    delete updateData.updatedAt;
-    delete updateData.__v;
+    if ('userId' in updateData) delete (updateData as any).userId;
+    if ('_id' in updateData) delete (updateData as any)._id;
+    if ('createdAt' in updateData) delete (updateData as any).createdAt;
+    if ('updatedAt' in updateData) delete (updateData as any).updatedAt;
+    if ('__v' in updateData) delete (updateData as any).__v;
     
     let settings = await Settings.findOne({ userId });
     
@@ -51,7 +53,9 @@ router.put("/", requireAuth, async (req: Request, res: Response) => {
     
     // Convert to plain object and remove MongoDB internal fields
     const settingsObj = settings.toObject();
-    delete settingsObj.__v;
+    if ('__v' in settingsObj) {
+      delete (settingsObj as any).__v;
+    }
     
     res.json(settingsObj);
   } catch (error: any) {
@@ -77,7 +81,9 @@ router.post("/reset", requireAuth, async (req: Request, res: Response) => {
     
     // Convert to plain object and remove MongoDB internal fields
     const settingsObj = settings.toObject();
-    delete settingsObj.__v;
+    if ('__v' in settingsObj) {
+      delete (settingsObj as any).__v;
+    }
     
     res.json(settingsObj);
   } catch (error: any) {

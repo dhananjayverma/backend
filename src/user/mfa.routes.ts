@@ -18,7 +18,7 @@ router.post("/setup", requireAuth, async (req: Request, res: Response) => {
     }
 
     // Generate secret
-    const secret = crypto.randomBytes(20).toString("base32");
+    const secret = crypto.randomBytes(20).toString("base64");
     const serviceName = "Medical Platform";
     const accountName = user.email;
 

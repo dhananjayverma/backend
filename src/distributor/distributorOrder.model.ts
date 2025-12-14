@@ -16,6 +16,8 @@ export interface IDistributorOrder extends Document {
   pickedAt?: Date;
   outForDeliveryAt?: Date;
   deliveredAt?: Date;
+  createdAt?: Date;
+  updatedAt?: Date;
 }
 
 const DistributorOrderSchema = new Schema<IDistributorOrder>(

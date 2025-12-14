@@ -188,12 +188,19 @@ router.post(
     }
 
     // Create notification for patient
+    let doctorInfo = null;
+    try {
+      doctorInfo = await User.findById(appointment.doctorId);
+    } catch (error) {
+      console.error("Failed to fetch doctor info:", error);
+    }
+    
     try {
       await createNotification({
         userId: appointment.patientId,
         type: "APPOINTMENT_BOOKED",
         title: "Appointment Booked",
-        message: `Your appointment with Dr. ${doctor?.name || "Doctor"} has been booked for ${appointmentDate.toLocaleString()}. Status: Pending confirmation.`,
+        message: `Your appointment with Dr. ${doctorInfo?.name || "Doctor"} has been booked for ${appointmentDate.toLocaleString()}. Status: Pending confirmation.`,
         metadata: {
           appointmentId: String(appointment._id),
           doctorId: appointment.doctorId,
@@ -951,8 +958,10 @@ router.delete("/:id", requireAuth, async (req: Request, res: Response) => {
     const appointmentIdStr = String(appointment._id);
     const appointmentObjectId = appointment._id as mongoose.Types.ObjectId;
 
+    let prescriptionsCount = 0;
     try {
       const prescriptions = await Prescription.find({ appointmentId: appointmentIdStr });
+      prescriptionsCount = prescriptions.length;
       if (prescriptions.length > 0) {
         await Prescription.deleteMany({ appointmentId: appointmentIdStr });
       }
@@ -960,8 +969,10 @@ router.delete("/:id", requireAuth, async (req: Request, res: Response) => {
       console.error("Error deleting prescriptions:", error.message);
     }
 
+    let conversationsCount = 0;
     try {
       const conversations = await Conversation.find({ appointmentId: appointmentIdStr });
+      conversationsCount = conversations.length;
       if (conversations.length > 0) {
         await Conversation.deleteMany({ appointmentId: appointmentIdStr });
       }

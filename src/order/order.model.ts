@@ -46,6 +46,8 @@ export interface IOrder extends Document {
     latitude: number;
     longitude: number;
   };
+  createdAt?: Date;
+  updatedAt?: Date;
 }
 
 const OrderItemSchema = new Schema<IOrderItem>(

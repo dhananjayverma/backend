@@ -15,6 +15,9 @@ interface JWTPayload {
 
 let io: SocketIOServer | null = null;
 
+// Track online users (userId -> Set of socketIds)
+const onlineUsers = new Map<string, Set<string>>();
+
 // Helper for logging
 const log = (...args: any[]) => {
   console.log(...args);
@@ -23,6 +26,16 @@ const log = (...args: any[]) => {
 const logWarn = (...args: any[]) => {
   console.warn(...args);
 };
+
+// Get all online user IDs
+export function getOnlineUsers(): string[] {
+  return Array.from(onlineUsers.keys());
+}
+
+// Check if a user is online
+export function isUserOnline(userId: string): boolean {
+  return onlineUsers.has(userId) && (onlineUsers.get(userId)?.size ?? 0) > 0;
+}
 
 // Helper to get room name for user
 const getUserRoom = (userId: string): string => `user:${userId}`;
@@ -91,6 +104,19 @@ export function initializeSocket(server: HTTPServer): SocketIOServer {
 
     log(`✅ Socket connected: User ${userId} (${userRole}) - Socket ID: ${socket.id}`);
 
+    // Track user as online
+    if (userId) {
+      if (!onlineUsers.has(userId)) {
+        onlineUsers.set(userId, new Set());
+      }
+      onlineUsers.get(userId)!.add(socket.id);
+      log(`✅ User ${userId} marked as online (${onlineUsers.get(userId)!.size} socket(s))`);
+      
+      // Notify admin panel that user is online
+      io.to("admin").emit("user:online", { userId });
+      io.to("admin").emit("users:status", { onlineUsers: getOnlineUsers() });
+    }
+
     // Join user-specific room
     if (userId) {
       const roomName = getUserRoom(userId);
@@ -117,9 +143,56 @@ export function initializeSocket(server: HTTPServer): SocketIOServer {
       log(`📋 User ${userId} is in rooms:`, rooms);
     }, 100);
 
+    // Handle user:online event (explicit online notification)
+    socket.on("user:online", (data: { userId: string }) => {
+      const targetUserId = data.userId || userId;
+      if (targetUserId) {
+        if (!onlineUsers.has(targetUserId)) {
+          onlineUsers.set(targetUserId, new Set());
+        }
+        onlineUsers.get(targetUserId)!.add(socket.id);
+        log(`✅ User ${targetUserId} explicitly marked as online via event`);
+        
+        // Notify admin panel
+        io.to("admin").emit("user:online", { userId: targetUserId });
+        io.to("admin").emit("users:status", { onlineUsers: getOnlineUsers() });
+      }
+    });
+
+    // Handle user:offline event (explicit offline notification)
+    socket.on("user:offline", (data: { userId: string }) => {
+      const targetUserId = data.userId || userId;
+      if (targetUserId && onlineUsers.has(targetUserId)) {
+        onlineUsers.get(targetUserId)!.delete(socket.id);
+        if (onlineUsers.get(targetUserId)!.size === 0) {
+          onlineUsers.delete(targetUserId);
+          log(`❌ User ${targetUserId} marked as offline (no more sockets)`);
+          
+          // Notify admin panel
+          io.to("admin").emit("user:offline", { userId: targetUserId });
+          io.to("admin").emit("users:status", { onlineUsers: getOnlineUsers() });
+        } else {
+          log(`⚠️ User ${targetUserId} still has ${onlineUsers.get(targetUserId)!.size} socket(s) connected`);
+        }
+      }
+    });
+
     // Handle disconnection
     socket.on("disconnect", (reason) => {
       log(`❌ Socket disconnected: User ${userId} (${userRole}) - Reason: ${reason}`);
+      
+      // Remove socket from online users
+      if (userId && onlineUsers.has(userId)) {
+        onlineUsers.get(userId)!.delete(socket.id);
+        if (onlineUsers.get(userId)!.size === 0) {
+          onlineUsers.delete(userId);
+          log(`❌ User ${userId} marked as offline (disconnected)`);
+          
+          // Notify admin panel
+          io.to("admin").emit("user:offline", { userId });
+          io.to("admin").emit("users:status", { onlineUsers: getOnlineUsers() });
+        }
+      }
     });
 
     // Handle custom events

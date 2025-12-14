@@ -4,7 +4,10 @@ import { Order } from "../order/order.model";
 import { DistributorOrder } from "../distributor/distributorOrder.model";
 import { generateOrderInvoicePDF, generateDistributorInvoicePDF } from "./invoice.service";
 import { Pharmacy } from "../master/pharmacy.model";
+import { Distributor } from "../master/distributor.model";
 import { User } from "../user/user.model";
+import { createNotification } from "../notifications/notification.service";
+import { createActivity } from "../activity/activity.service";
 
 export const router = Router();
 
@@ -40,7 +43,6 @@ router.get(
             name: pharmacy.name,
             address: pharmacy.address,
             phone: pharmacy.phone,
-            email: pharmacy.email,
           };
         }
       } catch (e) {
@@ -97,8 +99,27 @@ router.get(
       const userId = req.user!.sub;
       const userRole = req.user!.role;
       const isAdmin = userRole === "SUPER_ADMIN" || userRole === "HOSPITAL_ADMIN";
+      const isPharmacyStaff = userRole === "PHARMACY_STAFF";
+      
+      let isAuthorized = false;
+      
+      if (isAdmin) {
+        isAuthorized = true;
+      } else if (userRole === "DISTRIBUTOR") {
+        // For distributor users, check if their distributorId matches the order's distributorId
+        const user = await User.findById(userId);
+        if (user && user.distributorId && String(user.distributorId) === String(order.distributorId)) {
+          isAuthorized = true;
+        }
+      } else if (isPharmacyStaff) {
+        // For pharmacy staff, check if their pharmacyId matches the order's pharmacyId
+        const user = await User.findById(userId);
+        if (user && user.pharmacyId && String(user.pharmacyId) === String(order.pharmacyId)) {
+          isAuthorized = true;
+        }
+      }
 
-      if (!isAdmin && String(order.distributorId) !== String(userId) && String(order.pharmacyId) !== String(userId)) {
+      if (!isAuthorized) {
         return res.status(403).json({ message: "Access denied" });
       }
 
@@ -111,25 +132,25 @@ router.get(
             name: pharmacy.name,
             address: pharmacy.address,
             phone: pharmacy.phone,
-            email: pharmacy.email,
           };
         }
       } catch (e) {
         // Silently fail
       }
 
-      // Get distributor info
+      // Get distributor info from Distributor model
       let distributorInfo;
       try {
-        const distributor = await User.findById(order.distributorId);
+        const distributor = await Distributor.findById(order.distributorId);
         if (distributor) {
           distributorInfo = {
             name: distributor.name,
             address: distributor.address,
-            phone: distributor.phone,
+            phone: distributor.phone || distributor.phoneNumber,
           };
         }
       } catch (e) {
+        console.error("Error fetching distributor info:", e);
         // Silently fail
       }
 
@@ -146,6 +167,106 @@ router.get(
     } catch (error: any) {
       console.error("Error generating distributor invoice PDF:", error);
       res.status(500).json({ message: "Failed to generate invoice", error: error.message });
+    }
+  }
+);
+
+// Send invoice to pharmacy
+router.post(
+  "/distributor-order/:orderId/send-to-pharmacy",
+  requireAuth,
+  async (req, res) => {
+    try {
+      const { orderId } = req.params;
+      const order = await DistributorOrder.findById(orderId);
+
+      if (!order) {
+        return res.status(404).json({ message: "Order not found" });
+      }
+
+      // Check authorization - only distributor can send invoices
+      const userId = req.user!.sub;
+      const userRole = req.user!.role;
+      const isAdmin = userRole === "SUPER_ADMIN" || userRole === "HOSPITAL_ADMIN";
+      
+      let isAuthorized = false;
+      
+      if (isAdmin) {
+        isAuthorized = true;
+      } else if (userRole === "DISTRIBUTOR") {
+        const user = await User.findById(userId);
+        if (user && user.distributorId && String(user.distributorId) === String(order.distributorId)) {
+          isAuthorized = true;
+        }
+      }
+
+      if (!isAuthorized) {
+        return res.status(403).json({ message: "Only distributor can send invoices to pharmacy" });
+      }
+
+      // Get pharmacy info
+      const pharmacy = await Pharmacy.findById(order.pharmacyId);
+      if (!pharmacy) {
+        return res.status(404).json({ message: "Pharmacy not found" });
+      }
+
+      // Find all pharmacy staff users
+      const pharmacyStaff = await User.find({
+        role: "PHARMACY_STAFF",
+        pharmacyId: order.pharmacyId,
+        isActive: true,
+      });
+
+      const invoiceNumber = `INV-${String(order._id).slice(-8).toUpperCase()}-${new Date().getFullYear()}`;
+
+      // Send notification to all pharmacy staff
+      const notifications = pharmacyStaff.map((staff) =>
+        createNotification({
+          userId: String(staff._id),
+          type: "INVOICE_RECEIVED",
+          title: "Invoice Received from Distributor",
+          message: `Invoice ${invoiceNumber} has been sent for order #${String(order._id).slice(-8)}. Medicine: ${order.medicineName} (${order.quantity} units)`,
+          channel: "PUSH",
+          metadata: {
+            orderId: String(order._id),
+            invoiceNumber,
+            distributorId: order.distributorId,
+            pharmacyId: order.pharmacyId,
+            medicineName: order.medicineName,
+            quantity: order.quantity,
+          },
+        })
+      );
+
+      await Promise.all(notifications);
+
+      // Create activity
+      await createActivity(
+        "DISTRIBUTOR_ORDER_CREATED",
+        "Invoice Sent to Pharmacy",
+        `Invoice ${invoiceNumber} sent to ${pharmacy.name} for order #${String(order._id).slice(-8)}`,
+        {
+          pharmacyId: order.pharmacyId,
+          distributorId: order.distributorId,
+          metadata: {
+            orderId: String(order._id),
+            invoiceNumber,
+            medicineName: order.medicineName,
+            quantity: order.quantity,
+            action: "INVOICE_SENT",
+          },
+        }
+      );
+
+      res.json({
+        message: "Invoice sent to pharmacy successfully",
+        invoiceNumber,
+        pharmacyName: pharmacy.name,
+        notificationsSent: pharmacyStaff.length,
+      });
+    } catch (error: any) {
+      console.error("Error sending invoice to pharmacy:", error);
+      res.status(500).json({ message: "Failed to send invoice to pharmacy", error: error.message });
     }
   }
 );

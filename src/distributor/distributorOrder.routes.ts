@@ -53,10 +53,11 @@ router.post("/", async (req: Request, res: Response) => {
 
 router.get("/", async (req: Request, res: Response) => {
   try {
-    const { distributorId, status } = req.query;
+    const { distributorId, pharmacyId, status } = req.query;
     const filter: any = {};
     
     if (distributorId) filter.distributorId = distributorId;
+    if (pharmacyId) filter.pharmacyId = pharmacyId;
     if (status) filter.status = status;
 
     const orders = await DistributorOrder.find(filter)
@@ -143,7 +144,7 @@ router.patch("/:id", async (req: Request, res: Response) => {
       }
     } else if (status === "DISPATCHED") {
       await createActivity(
-        "DISTRIBUTOR_ORDER_DISPATCHED",
+        "ORDER_STATUS_UPDATED",
         "Distributor Order Dispatched",
         `Order for ${order.medicineName} dispatched to Pharmacy ${order.pharmacyId}`,
         {
@@ -153,18 +154,19 @@ router.patch("/:id", async (req: Request, res: Response) => {
             orderId: getOrderId(order),
             medicineName: order.medicineName,
             deliveryAgentId: order.deliveryAgentId,
+            status: "DISPATCHED",
           },
         }
       );
     } else if (status === "ACCEPTED") {
       await createActivity(
-        "DISTRIBUTOR_ORDER_ACCEPTED",
+        "ORDER_STATUS_UPDATED",
         "Distributor Order Accepted",
         `Order for ${order.medicineName} accepted by Distributor ${order.distributorId}`,
         {
           pharmacyId: order.pharmacyId,
           distributorId: order.distributorId,
-          metadata: { orderId: getOrderId(order), medicineName: order.medicineName },
+          metadata: { orderId: getOrderId(order), medicineName: order.medicineName, status: "ACCEPTED" },
         }
       );
     }

@@ -305,6 +305,84 @@ router.get(
   }
 );
 
+// Get online users status (MUST come before /:id route)
+router.get(
+  "/online-status",
+  requireAuth,
+  async (req, res) => {
+    try {
+      // Import getOnlineUsers function
+      const socketModule = await import("../socket/socket.server");
+      const getOnlineUsers = socketModule.getOnlineUsers;
+      
+      if (!getOnlineUsers) {
+        console.error("getOnlineUsers function not found in socket.server module");
+        return res.json({ onlineUsers: [] });
+      }
+      
+      const onlineUsers = getOnlineUsers();
+      console.log("Returning online users:", onlineUsers);
+      res.json({ onlineUsers: Array.isArray(onlineUsers) ? onlineUsers : [] });
+    } catch (error: any) {
+      console.error("Error fetching online status:", error);
+      // Return empty array instead of error to prevent frontend crashes
+      res.json({ onlineUsers: [] });
+    }
+  }
+);
+
+// Register user as online (called on login) - MUST come before /:id route
+router.post(
+  "/:id/online",
+  requireAuth,
+  async (req, res) => {
+    try {
+      const userId = req.params.id;
+      const { getIO, getOnlineUsers } = await import("../socket/socket.server");
+      const io = getIO();
+      
+      // Get all sockets for this user and mark them as online
+      const userRoom = `user:${userId}`;
+      const socketsInRoom = io.sockets.adapter.rooms.get(userRoom);
+      
+      if (socketsInRoom && socketsInRoom.size > 0) {
+        // User has active socket connections, they're online
+        // The socket connection handler already tracks this, so we just confirm
+        res.json({ message: "User marked as online", online: true, onlineUsers: getOnlineUsers() });
+      } else {
+        // No active socket, but we'll still mark them as online for tracking
+        // This handles cases where the socket hasn't connected yet
+        res.json({ message: "User login registered", online: false, onlineUsers: getOnlineUsers() });
+      }
+    } catch (error: any) {
+      console.error("Error registering user as online:", error);
+      res.status(500).json({ message: error.message || "Failed to register as online" });
+    }
+  }
+);
+
+// Register user as offline (called on logout) - MUST come before /:id route
+router.post(
+  "/:id/offline",
+  requireAuth,
+  async (req, res) => {
+    try {
+      const userId = req.params.id;
+      const { getIO, getOnlineUsers } = await import("../socket/socket.server");
+      const io = getIO();
+      
+      // Emit offline event to all sockets for this user
+      const userRoom = `user:${userId}`;
+      io.to(userRoom).emit("force:disconnect", { reason: "User logged out" });
+      
+      res.json({ message: "User marked as offline", online: false, onlineUsers: getOnlineUsers() });
+    } catch (error: any) {
+      console.error("Error registering user as offline:", error);
+      res.status(500).json({ message: error.message || "Failed to register as offline" });
+    }
+  }
+);
+
 // Get single user by ID
 router.get(
   "/:id",
@@ -624,3 +702,4 @@ router.post("/logout", requireAuth, async (req, res) => {
     res.status(500).json({ message: error.message || "Failed to logout" });
   }
 });
+

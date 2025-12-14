@@ -239,10 +239,10 @@ router.post(
 router.get(
   "/distributors",
   requireAuth,
-  requireRole(["SUPER_ADMIN", "HOSPITAL_ADMIN"]),
   async (_req, res) => {
     try {
-      const distributors = await Distributor.find().sort({ createdAt: -1 });
+      // Allow SUPER_ADMIN, HOSPITAL_ADMIN, PHARMACY_STAFF, and DISTRIBUTOR to view distributors
+      const distributors = await Distributor.find({ isActive: { $ne: false } }).sort({ createdAt: -1 });
       res.json(distributors);
     } catch (error: any) {
       res.status(400).json({ message: error.message });

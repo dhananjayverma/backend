@@ -25,6 +25,20 @@ import { router as transcriptionRouter } from "./transcription/transcription.rou
 import { router as invoiceRouter } from "./invoice/invoice.routes";
 
 export function registerRoutes(app: Express) {
+  // Root route - API information
+  app.get("/", (_req, res) => {
+    res.json({
+      message: "Hospital Ecosystem API",
+      version: "1.0.0",
+      status: "running",
+      endpoints: {
+        health: "/api/health",
+        public: "/api/public",
+        api: "/api",
+      },
+    });
+  });
+
   // Public API routes (no authentication required)
   app.use("/api/public", publicRouter);
   

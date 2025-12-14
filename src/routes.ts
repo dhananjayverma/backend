@@ -70,6 +70,10 @@ export function registerRoutes(app: Express) {
   app.get("/api/health", (_req, res) => {
     res.json({ status: "ok" });
   });
+
+  app.get("/health", (_req, res) => {
+    res.json({ status: "ok", message: "Server is running" });
+  });
 }
 
 

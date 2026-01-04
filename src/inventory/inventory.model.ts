@@ -27,6 +27,8 @@ export interface IInventoryItem extends Document {
   prescriptionRequired?: boolean; // Whether prescription is required
   // Legacy field for backward compatibility
   price?: number; // Deprecated: use sellingPrice instead
+  createdAt?: Date;
+  updatedAt?: Date;
 }
 
 const InventorySchema = new Schema<IInventoryItem>(

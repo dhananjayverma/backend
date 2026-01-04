@@ -923,7 +923,7 @@ router.patch("/:id", requireAuth, requireRole(["PHARMACY_STAFF", "SUPER_ADMIN", 
     // Log activity if prescription was verified
     if (allowedUpdates.prescriptionVerified !== undefined) {
       await createActivity(
-        "ORDER_UPDATED",
+        "ORDER_STATUS_UPDATED",
         "Prescription Verification Updated",
         `Prescription for order ${getShortOrderId(order)} ${allowedUpdates.prescriptionVerified ? "verified" : "rejected"}`,
         {

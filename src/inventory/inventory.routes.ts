@@ -92,23 +92,96 @@ async function checkAndNotifyLowStock(item: IInventoryItem, isNewItem: boolean =
 // Create or update inventory item
 router.post("/", async (req: Request, res: Response) => {
   try {
-    const { pharmacyId, medicineName, batchNumber, expiryDate, quantity, threshold, distributorId, minStockLevel, unitPrice, supplier } =
-      req.body;
+    console.log("📦 Creating inventory item, received data:", JSON.stringify(req.body, null, 2));
+    
+    const { 
+      pharmacyId, 
+      medicineName, 
+      composition,
+      brandName,
+      batchNumber, 
+      expiryDate, 
+      quantity, 
+      threshold, 
+      distributorId, 
+      minStockLevel, 
+      unitPrice, 
+      purchasePrice,
+      sellingPrice,
+      mrp,
+      supplier,
+      category,
+      imageUrl,
+      description,
+      prescriptionRequired,
+      rackNumber,
+      rowNumber,
+    } = req.body;
+
+    // Validate required fields
+    if (!medicineName) {
+      return res.status(400).json({ message: "medicineName is required" });
+    }
+    if (quantity === undefined || quantity === null) {
+      return res.status(400).json({ message: "quantity is required" });
+    }
 
     // Use threshold or minStockLevel (frontend uses minStockLevel)
     const stockThreshold = threshold || minStockLevel || 10;
+    
+    // Use composition or default to medicineName
+    const itemComposition = composition || medicineName;
+    
+    // Generate batch number if not provided
+    const itemBatchNumber = batchNumber || `BATCH-${Date.now()}-${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
+    
+    // Set expiry date - if not provided, set to 1 year from now
+    let itemExpiryDate = expiryDate;
+    if (!itemExpiryDate) {
+      const futureDate = new Date();
+      futureDate.setFullYear(futureDate.getFullYear() + 1);
+      itemExpiryDate = futureDate;
+    } else if (typeof itemExpiryDate === 'string') {
+      // Convert string date to Date object
+      itemExpiryDate = new Date(itemExpiryDate);
+    }
 
-    // For warehouse inventory (distributor), pharmacyId is optional
-    const item = await InventoryItem.create({
+    const itemData = {
       pharmacyId: pharmacyId || undefined,
       medicineName,
-      batchNumber,
-      expiryDate,
-      quantity,
+      composition: itemComposition,
+      brandName: brandName || undefined,
+      batchNumber: itemBatchNumber,
+      expiryDate: itemExpiryDate,
+      quantity: Number(quantity),
       threshold: stockThreshold,
-      distributorId,
-      price: unitPrice,
-    }) as IInventoryItem;
+      distributorId: distributorId || undefined,
+      purchasePrice: purchasePrice !== undefined ? Number(purchasePrice) : (unitPrice ? Number(unitPrice) * 0.8 : 0),
+      sellingPrice: sellingPrice !== undefined ? Number(sellingPrice) : (unitPrice ? Number(unitPrice) : 0),
+      mrp: mrp !== undefined ? Number(mrp) : undefined,
+      price: unitPrice, // Legacy field
+      category: category || "MEDICINE",
+      imageUrl: imageUrl || undefined,
+      description: description || undefined,
+      prescriptionRequired: prescriptionRequired || false,
+      rackNumber: rackNumber || undefined,
+      rowNumber: rowNumber || undefined,
+    };
+
+    console.log("📦 Creating inventory item with data:", JSON.stringify(itemData, null, 2));
+    console.log("  - pharmacyId being saved:", itemData.pharmacyId);
+    console.log("  - pharmacyId type:", typeof itemData.pharmacyId);
+
+    // For warehouse inventory (distributor), pharmacyId is optional
+    const item = await InventoryItem.create(itemData) as IInventoryItem;
+
+    console.log("✅ Inventory item created successfully:");
+    console.log("  - Item ID:", item._id);
+    console.log("  - Medicine Name:", item.medicineName);
+    console.log("  - Saved pharmacyId:", item.pharmacyId);
+    console.log("  - Saved pharmacyId type:", typeof item.pharmacyId);
+    console.log("  - Category:", item.category);
+    console.log("  - Quantity:", item.quantity);
 
     // Check for low stock and notify
     setImmediate(() => {
@@ -132,7 +205,9 @@ router.post("/", async (req: Request, res: Response) => {
 
     res.status(201).json(item);
   } catch (error: any) {
-    res.status(400).json({ message: error.message });
+    console.error("❌ Error creating inventory item:", error);
+    console.error("Error stack:", error.stack);
+    res.status(400).json({ message: error.message || "Failed to create inventory item" });
   }
 });
 
@@ -164,11 +239,54 @@ router.get("/", async (req: Request, res: Response) => {
 // List inventory for a pharmacy
 router.get("/by-pharmacy/:pharmacyId", async (req: Request, res: Response) => {
   try {
-    const items = await InventoryItem.find({ pharmacyId: req.params.pharmacyId })
+    const pharmacyId = req.params.pharmacyId;
+    console.log(`📋 Fetching inventory for pharmacy: ${pharmacyId}`);
+    console.log(`  - pharmacyId type: ${typeof pharmacyId}`);
+    console.log(`  - pharmacyId length: ${pharmacyId?.length}`);
+    
+    // First, check if there are ANY items in the database for debugging
+    const totalItems = await InventoryItem.countDocuments({});
+    console.log(`  - Total items in database: ${totalItems}`);
+    
+    // Check if there are any items with this pharmacyId (with type coercion)
+    const itemsWithId = await InventoryItem.find({ pharmacyId: pharmacyId })
       .sort({ medicineName: 1 })
       .limit(500);
+    
+    // Also try string comparison
+    const itemsWithStringId = await InventoryItem.find({ pharmacyId: String(pharmacyId) })
+      .sort({ medicineName: 1 })
+      .limit(500);
+    
+    // Get all unique pharmacyIds in database for debugging
+    const allItems = await InventoryItem.find({}).limit(10).select("pharmacyId medicineName").lean();
+    const uniquePharmacyIds = [...new Set(allItems.map((item: any) => String(item.pharmacyId)))];
+    console.log(`  - Sample pharmacyIds in database (first 10 items):`, uniquePharmacyIds);
+    
+    // Use the results that match
+    const items = itemsWithId.length > 0 ? itemsWithId : itemsWithStringId;
+    
+    console.log(`  - Items found with exact match: ${itemsWithId.length}`);
+    console.log(`  - Items found with string match: ${itemsWithStringId.length}`);
+    console.log(`✅ Found ${items.length} inventory items for pharmacy ${pharmacyId}`);
+    
+    if (items.length > 0) {
+      console.log(`Sample items:`, items.slice(0, 3).map((item: any) => ({ 
+        medicineName: item.medicineName, 
+        category: item.category, 
+        quantity: item.quantity,
+        pharmacyId: String(item.pharmacyId),
+        pharmacyIdType: typeof item.pharmacyId
+      })));
+    } else {
+      console.warn(`⚠️ No items found for pharmacy ${pharmacyId}`);
+      console.warn(`  - Check if pharmacyId in database matches: ${pharmacyId}`);
+      console.warn(`  - Available pharmacyIds: ${uniquePharmacyIds.join(", ")}`);
+    }
+    
     res.json(items);
   } catch (error: any) {
+    console.error("❌ Error fetching inventory:", error);
     res.status(400).json({ message: error.message });
   }
 });

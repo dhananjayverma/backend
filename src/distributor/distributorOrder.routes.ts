@@ -25,14 +25,18 @@ router.post("/", async (req: Request, res: Response) => {
 
     const { pharmacyId, distributorId, medicineName, category, quantity } = req.body;
 
+    console.log("Creating distributor order:", { pharmacyId, distributorId, medicineName, category, quantity });
+
     const order = await DistributorOrder.create({
-      pharmacyId,
-      distributorId,
-      medicineName,
+      pharmacyId: String(pharmacyId),
+      distributorId: String(distributorId),
+      medicineName: String(medicineName),
       category: category || undefined,
-      quantity,
+      quantity: Number(quantity),
       status: "PENDING",
     });
+
+    console.log("Order created successfully:", { orderId: getOrderId(order), pharmacyId: order.pharmacyId, distributorId: order.distributorId });
 
     await createActivity(
       "DISTRIBUTOR_ORDER_CREATED",
@@ -57,13 +61,59 @@ router.get("/", async (req: Request, res: Response) => {
     const { distributorId, pharmacyId, status } = req.query;
     const filter: any = {};
     
-    if (distributorId) filter.distributorId = distributorId;
-    if (pharmacyId) filter.pharmacyId = pharmacyId;
+    if (distributorId) {
+      const distIdString = String(distributorId).trim();
+      filter.distributorId = distIdString;
+      console.log("Filtering by distributorId:", distIdString);
+    }
+    if (pharmacyId) {
+      const pharmaIdString = String(pharmacyId).trim();
+      filter.pharmacyId = pharmaIdString;
+      console.log("Filtering by pharmacyId:", pharmaIdString);
+    }
     if (status) filter.status = status;
+
+    console.log("Fetching distributor orders with filter:", JSON.stringify(filter));
+
+    // First, let's check if there are ANY orders in the database
+    const totalOrders = await DistributorOrder.countDocuments({});
+    console.log(`Total orders in database: ${totalOrders}`);
+    
+    // If filtering by distributorId, let's also check what distributorIds exist
+    if (distributorId) {
+      const allOrders = await DistributorOrder.find({}).limit(10).select("distributorId").lean();
+      const uniqueDistributorIds = [...new Set(allOrders.map((o: any) => String(o.distributorId)))];
+      console.log(`Sample distributorIds in database (first 10 orders):`, uniqueDistributorIds);
+    }
 
     const orders = await DistributorOrder.find(filter)
       .sort({ createdAt: -1 })
       .limit(DEFAULT_LIMIT);
+    
+    console.log(`Found ${orders.length} orders matching filter`);
+    
+    // Log the actual distributorIds found if no matches
+    if (orders.length === 0 && distributorId) {
+      const sampleOrders = await DistributorOrder.find({}).limit(5).select("distributorId createdAt").lean();
+      const sampleDistributorIds = sampleOrders.map((o: any) => String(o.distributorId));
+      console.log("Sample orders from database:", sampleOrders.map((o: any) => ({
+        distributorId: String(o.distributorId),
+        distributorIdType: typeof o.distributorId,
+        createdAt: o.createdAt
+      })));
+      
+      // Check if the queried distributorId exists in any orders
+      const queriedIdString = String(distributorId).trim();
+      const matchingIds = sampleDistributorIds.filter(id => id === queriedIdString);
+      
+      if (matchingIds.length === 0 && sampleDistributorIds.length > 0) {
+        console.error("⚠️ MISMATCH DETECTED:");
+        console.error(`  Queried distributorId: "${queriedIdString}"`);
+        console.error(`  Found distributorIds in orders: ${JSON.stringify(sampleDistributorIds)}`);
+        console.error(`  These don't match! The user's distributorId should be set to match the Distributor master table _id used in orders.`);
+        console.error(`  Please check if the user account's distributorId is correctly set to match the Distributor master table _id.`);
+      }
+    }
     
     res.json(orders);
   } catch (error: any) {
@@ -190,5 +240,47 @@ router.get("/:id", async (req: Request, res: Response) => {
   } catch (error: any) {
     console.error("Error fetching distributor order:", error);
     res.status(500).json({ message: "Failed to fetch distributor order", error: error.message });
+  }
+});
+
+// Delete distributor order
+router.delete("/:id", async (req: Request, res: Response) => {
+  try {
+    const order = await DistributorOrder.findById(req.params.id);
+    
+    if (!order) {
+      return res.status(404).json({ message: "Distributor order not found" });
+    }
+
+    // Only allow deleting PENDING or CANCELLED orders
+    if (order.status !== "PENDING" && order.status !== "CANCELLED") {
+      return res.status(400).json({ 
+        message: `Cannot delete order with status: ${order.status}. Only PENDING or CANCELLED orders can be deleted.` 
+      });
+    }
+
+    await DistributorOrder.findByIdAndDelete(req.params.id);
+
+    // Create activity log for deletion
+    try {
+      await createActivity(
+        "ORDER_STATUS_UPDATED",
+        "Distributor Order Deleted",
+        `Order for ${order.medicineName} (${order.quantity} units) deleted by Pharmacy ${order.pharmacyId}`,
+        {
+          pharmacyId: order.pharmacyId,
+          distributorId: order.distributorId,
+          metadata: { orderId: getOrderId(order), medicineName: order.medicineName, quantity: order.quantity, action: "DELETED" },
+        }
+      );
+    } catch (error) {
+      console.error("Failed to create activity log for order deletion:", error);
+      // Continue even if activity log fails
+    }
+
+    res.json({ message: "Distributor order deleted successfully" });
+  } catch (error: any) {
+    console.error("Error deleting distributor order:", error);
+    res.status(500).json({ message: "Failed to delete distributor order", error: error.message });
   }
 });

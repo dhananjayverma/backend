@@ -8,6 +8,7 @@ import { User } from "../user/user.model";
 import { Hospital } from "../master/hospital.model";
 import { Pharmacy } from "../master/pharmacy.model";
 import { AggregationService } from "../shared/services/aggregation.service";
+import { DoctorSchedule, Slot } from "../schedule/schedule.model";
 import jwt from "jsonwebtoken";
 import { JWT_SECRET } from "../config";
 
@@ -449,6 +450,88 @@ router.get("/prescriptions", async (req: Request, res: Response) => {
     res.status(500).json({
       success: false,
       message: "Failed to fetch prescriptions",
+      error: error.message,
+    });
+  }
+});
+
+// Get doctor schedules (public - for patient portal)
+router.get("/doctor-schedules", async (req: Request, res: Response) => {
+  try {
+    const { doctorId, hospitalId } = req.query;
+    const filter: any = { isActive: true };
+    
+    if (doctorId) filter.doctorId = doctorId;
+    if (hospitalId) filter.hospitalId = hospitalId;
+    
+    const schedules = await DoctorSchedule.find(filter)
+      .sort({ doctorId: 1, dayOfWeek: 1 })
+      .lean();
+    
+    res.json({
+      success: true,
+      data: schedules,
+      count: schedules.length,
+    });
+  } catch (error: any) {
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch doctor schedules",
+      error: error.message,
+    });
+  }
+});
+
+// Get available slots for a doctor (public - for patient portal)
+router.get("/doctor-slots", async (req: Request, res: Response) => {
+  try {
+    const { doctorId, date, hospitalId } = req.query;
+    
+    if (!doctorId || !date) {
+      return res.status(400).json({
+        success: false,
+        message: "doctorId and date are required",
+      });
+    }
+    
+    const slotDate = new Date(date as string);
+    if (isNaN(slotDate.getTime())) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid date format",
+      });
+    }
+    
+    slotDate.setHours(0, 0, 0, 0);
+    const nextDay = new Date(slotDate);
+    nextDay.setDate(nextDay.getDate() + 1);
+    
+    const filter: any = {
+      doctorId,
+      date: { $gte: slotDate, $lt: nextDay },
+      isBlocked: false,
+    };
+    
+    if (hospitalId) filter.hospitalId = hospitalId;
+    
+    const slots = await Slot.find(filter)
+      .sort({ startTime: 1 })
+      .lean();
+    
+    // Filter out fully booked slots
+    const availableSlots = slots.filter((slot: any) => {
+      return slot.bookedCount < slot.maxBookings;
+    });
+    
+    res.json({
+      success: true,
+      data: availableSlots,
+      count: availableSlots.length,
+    });
+  } catch (error: any) {
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch available slots",
       error: error.message,
     });
   }

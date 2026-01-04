@@ -1,5 +1,5 @@
 import { Router, Request, Response } from "express";
-import { DoctorSchedule, Slot, IDoctorSchedule, ISlot } from "./schedule.model";
+import { DoctorSchedule, Slot, IDoctorSchedule, ISlot, DayOfWeek } from "./schedule.model";
 import {
   generateSlotsForDate,
   generateSlotsForDateRange,
@@ -18,15 +18,48 @@ export const router = Router();
 
 // ==================== DOCTOR SCHEDULE ROUTES (Admin) ====================
 
-// Create or update doctor schedule
+// Helper function to get days based on schedule type
+const getDaysForScheduleType = (scheduleType: string, selectedDays?: string[]): DayOfWeek[] => {
+  const allDays: DayOfWeek[] = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
+  
+  switch (scheduleType) {
+    case "weekday":
+      return ["monday", "tuesday", "wednesday", "thursday", "friday"];
+    case "weekend":
+      return ["saturday", "sunday"];
+    case "daily":
+      return allDays;
+    case "particular":
+      return (selectedDays || []) as DayOfWeek[];
+    default:
+      return [];
+  }
+};
+
+// Create or update doctor schedule (single or bulk)
 router.post(
   "/doctor-schedule",
   requireAuth,
   requireRole(["DOCTOR", "SUPER_ADMIN", "HOSPITAL_ADMIN"]),
-  validateRequired(["doctorId", "dayOfWeek", "startTime", "endTime", "slotDuration"]),
   async (req: Request, res: Response) => {
     try {
-      const { doctorId, dayOfWeek, startTime, endTime, slotDuration, isActive, maxAppointmentsPerSlot, hospitalId } = req.body;
+      const { 
+        doctorId, 
+        dayOfWeek, 
+        startTime, 
+        endTime, 
+        slotDuration, 
+        isActive, 
+        maxAppointmentsPerSlot, 
+        hospitalId,
+        scheduleType, // "weekday" | "weekend" | "daily" | "particular" | "single"
+        selectedDays // Array of days for "particular" type
+      } = req.body;
+
+      // Validate required fields
+      if (!doctorId || !startTime || !endTime || !slotDuration) {
+        throw new AppError("doctorId, startTime, endTime, and slotDuration are required", 400);
+      }
 
       // Validate time format (HH:mm)
       const timeRegex = /^([0-1][0-9]|2[0-3]):[0-5][0-9]$/;
@@ -34,9 +67,9 @@ router.post(
         throw new AppError("Invalid time format. Use HH:mm format (e.g., 09:00)", 400);
       }
 
-      // Validate slot duration
-      if (slotDuration < 5 || slotDuration > 120) {
-        throw new AppError("Slot duration must be between 5 and 120 minutes", 400);
+      // Validate slot duration (30 minutes to 1 hour)
+      if (slotDuration < 30 || slotDuration > 60) {
+        throw new AppError("Slot duration must be between 30 and 60 minutes", 400);
       }
 
       // Validate end time is after start time
@@ -49,35 +82,55 @@ router.post(
         throw new AppError("End time must be after start time", 400);
       }
 
-      // Check if schedule already exists
-      const existing = await DoctorSchedule.findOne({ doctorId, dayOfWeek });
+      const daysToCreate = scheduleType && scheduleType !== "single" 
+        ? getDaysForScheduleType(scheduleType, selectedDays)
+        : dayOfWeek 
+          ? [dayOfWeek as DayOfWeek]
+          : [];
 
-      let schedule: IDoctorSchedule;
-      if (existing) {
-        // Update existing
-        existing.startTime = startTime;
-        existing.endTime = endTime;
-        existing.slotDuration = slotDuration;
-        existing.isActive = isActive !== undefined ? isActive : existing.isActive;
-        existing.maxAppointmentsPerSlot = maxAppointmentsPerSlot || existing.maxAppointmentsPerSlot || 1;
-        existing.hospitalId = hospitalId || existing.hospitalId;
-        await existing.save();
-        schedule = existing;
-      } else {
-        // Create new
-        schedule = await DoctorSchedule.create({
-          doctorId,
-          dayOfWeek,
-          startTime,
-          endTime,
-          slotDuration,
-          isActive: isActive !== undefined ? isActive : true,
-          maxAppointmentsPerSlot: maxAppointmentsPerSlot || 1,
-          hospitalId,
-        });
+      if (daysToCreate.length === 0) {
+        throw new AppError("No days specified for schedule creation", 400);
       }
 
-      res.status(201).json(schedule);
+      const createdSchedules: IDoctorSchedule[] = [];
+      const updatedSchedules: IDoctorSchedule[] = [];
+
+      // Create or update schedules for each day
+      for (const day of daysToCreate) {
+        const existing = await DoctorSchedule.findOne({ doctorId, dayOfWeek: day });
+
+        if (existing) {
+          // Update existing
+          existing.startTime = startTime;
+          existing.endTime = endTime;
+          existing.slotDuration = slotDuration;
+          existing.isActive = isActive !== undefined ? isActive : existing.isActive;
+          existing.maxAppointmentsPerSlot = maxAppointmentsPerSlot || existing.maxAppointmentsPerSlot || 1;
+          existing.hospitalId = hospitalId || existing.hospitalId;
+          await existing.save();
+          updatedSchedules.push(existing);
+        } else {
+          // Create new
+          const schedule = await DoctorSchedule.create({
+            doctorId,
+            dayOfWeek: day,
+            startTime,
+            endTime,
+            slotDuration,
+            isActive: isActive !== undefined ? isActive : true,
+            maxAppointmentsPerSlot: maxAppointmentsPerSlot || 1,
+            hospitalId,
+          });
+          createdSchedules.push(schedule);
+        }
+      }
+
+      res.status(201).json({
+        message: `Successfully ${createdSchedules.length > 0 ? 'created' : ''} ${createdSchedules.length} schedule(s) and ${updatedSchedules.length > 0 ? 'updated' : ''} ${updatedSchedules.length} schedule(s)`,
+        created: createdSchedules,
+        updated: updatedSchedules,
+        total: createdSchedules.length + updatedSchedules.length
+      });
     } catch (error: any) {
       if (error instanceof AppError) {
         res.status(error.status).json({ message: error.message });

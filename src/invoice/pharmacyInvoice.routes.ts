@@ -6,6 +6,7 @@ import { createActivity } from "../activity/activity.service";
 import { generatePharmacyInvoicePDF } from "../invoice/pharmacyInvoicePDF";
 import { Pharmacy } from "../master/pharmacy.model";
 import { User } from "../user/user.model";
+import { createNotification } from "../notifications/notification.service";
 
 export const router = Router();
 
@@ -25,7 +26,10 @@ router.post("/", requireAuth, requireRole(["SUPER_ADMIN", "PHARMACY_STAFF"]), as
       notes,
     } = req.body;
 
-    const userId = (req as any).user?.userId;
+    const userId = req.user?.sub;
+    if (!userId) {
+      return res.status(401).json({ message: "User authentication required" });
+    }
 
     // Validate and enrich items with inventory data
     const enrichedItems = await Promise.all(
@@ -39,14 +43,35 @@ router.post("/", requireAuth, requireRole(["SUPER_ADMIN", "PHARMACY_STAFF"]), as
           throw new Error(`Insufficient stock for ${inventoryItem.medicineName}. Available: ${inventoryItem.quantity}, Requested: ${item.quantity}`);
         }
 
+        // Use prices from frontend (already calculated correctly from order's totalAmount)
+        // Only use inventory prices as fallback if frontend didn't provide them
         const sellingPrice = item.sellingPrice || inventoryItem.sellingPrice;
         const mrp = item.mrp || inventoryItem.mrp || inventoryItem.sellingPrice;
         const discount = item.discount || 0;
-        const discountAmount = (mrp * item.quantity * discount) / 100;
-        const subtotal = mrp * item.quantity - discountAmount;
-        const taxRate = item.taxRate || 18; // Default 18% GST
-        const taxAmount = (subtotal * taxRate) / 100;
-        const total = subtotal + taxAmount;
+        
+        // If frontend provided calculated values, use them; otherwise calculate from inventory
+        let subtotal: number;
+        let discountAmount: number;
+        let taxRate: number;
+        let taxAmount: number;
+        let total: number;
+        
+        // Check if frontend provided pre-calculated values (for order-based invoices)
+        if (item.subtotal !== undefined && item.taxAmount !== undefined && item.total !== undefined) {
+          // Use pre-calculated values from frontend (these are based on order's totalAmount)
+          subtotal = item.subtotal;
+          discountAmount = item.discountAmount || 0;
+          taxRate = item.taxRate || 18;
+          taxAmount = item.taxAmount;
+          total = item.total;
+        } else {
+          // Calculate from inventory prices (for walk-in orders)
+          discountAmount = (mrp * item.quantity * discount) / 100;
+          subtotal = mrp * item.quantity - discountAmount;
+          taxRate = item.taxRate || 18; // Default 18% GST
+          taxAmount = (subtotal * taxRate) / 100;
+          total = subtotal + taxAmount;
+        }
 
         return {
           inventoryItemId: String(inventoryItem._id),
@@ -120,6 +145,28 @@ router.post("/", requireAuth, requireRole(["SUPER_ADMIN", "PHARMACY_STAFF"]), as
         },
       }
     );
+
+    // Send notification to patient if this is a patient order
+    if (patientId && invoiceType === "PATIENT_ORDER") {
+      try {
+        await createNotification({
+          userId: patientId,
+          type: "INVOICE_CREATED",
+          title: "Invoice Generated",
+          message: `Your invoice ${invoice.invoiceNumber} for ₹${grandTotal.toFixed(2)} has been generated and is ready for download.`,
+          channel: "PUSH",
+          metadata: {
+            invoiceId: String(invoice._id),
+            invoiceNumber: invoice.invoiceNumber,
+            orderId: orderId,
+            amount: grandTotal,
+          },
+        });
+      } catch (error) {
+        console.error("Failed to send notification to patient:", error);
+        // Don't fail the request if notification fails
+      }
+    }
 
     res.status(201).json(invoice);
   } catch (error: any) {

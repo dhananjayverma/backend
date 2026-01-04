@@ -95,7 +95,7 @@ router.get("/reports", async (req: Request, res: Response) => {
 
 router.get("/summary", async (req: Request, res: Response) => {
   try {
-    const { from, to, hospitalId, pharmacyId } = req.query;
+    const { from, to, hospitalId, pharmacyId, patientId } = req.query;
     const filter: any = {};
     
     const dateFilter = createDateFilter(from as string, to as string);
@@ -103,6 +103,7 @@ router.get("/summary", async (req: Request, res: Response) => {
     
     if (hospitalId) filter.hospitalId = hospitalId;
     if (pharmacyId) filter.pharmacyId = pharmacyId;
+    if (patientId) filter.patientId = patientId;
 
     const entries = await FinanceEntry.find(filter).limit(DEFAULT_LIMIT);
     

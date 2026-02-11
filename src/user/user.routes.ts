@@ -121,9 +121,27 @@ router.post("/signup", async (req, res) => {
 });
 
 router.post("/login", async (req, res) => {
-  const { email, password, mfaCode } = req.body;
+  const { email, phone, password, mfaCode } = req.body;
 
-  const user = await User.findOne({ email });
+  if (!password) {
+    return res.status(401).json({ message: "Invalid credentials" });
+  }
+
+  let user = null;
+  if (email && typeof email === "string" && email.trim()) {
+    user = await User.findOne({ email: email.trim().toLowerCase() });
+  }
+  if (!user && phone && typeof phone === "string") {
+    const normalized = String(phone).replace(/\D/g, "").slice(-10);
+    if (normalized.length >= 10) {
+      user = await User.findOne({
+        $or: [
+          { phone: normalized },
+          { phone: { $regex: normalized + "$" } },
+        ],
+      });
+    }
+  }
   if (!user) {
     return res.status(401).json({ message: "Invalid credentials" });
   }
@@ -439,7 +457,7 @@ router.patch(
         return res.status(400).json({ message: "Invalid user ID" });
       }
 
-      const { name, email, phone, role, hospitalId, pharmacyId, distributorId, isActive, password, status, currentOrderId, specialization, qualification, serviceCharge } = req.body;
+      const { name, email, phone, role, hospitalId, pharmacyId, distributorId, isActive, password, status, currentOrderId, specialization, qualification, serviceCharge, pharmacyBranchRole } = req.body;
       const userRole = req.user?.role;
       const isAdmin = userRole === "SUPER_ADMIN" || userRole === "HOSPITAL_ADMIN";
       const isDistributor = userRole === "DISTRIBUTOR";
@@ -481,6 +499,11 @@ router.patch(
         if (qualification !== undefined) update.qualification = qualification === "" ? undefined : qualification;
         if (serviceCharge !== undefined) {
           update.serviceCharge = serviceCharge === "" || serviceCharge === null ? undefined : parseFloat(serviceCharge);
+        }
+        if (pharmacyBranchRole !== undefined) {
+          update.pharmacyBranchRole = ["PHARMACY_MANAGER", "PHARMACY_CASHIER", "PHARMACY_STAFF"].includes(pharmacyBranchRole)
+            ? pharmacyBranchRole
+            : "PHARMACY_STAFF";
         }
       }
       // Distributors can update delivery agent status and currentOrderId

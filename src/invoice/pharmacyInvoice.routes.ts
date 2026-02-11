@@ -7,8 +7,17 @@ import { generatePharmacyInvoicePDF } from "../invoice/pharmacyInvoicePDF";
 import { Pharmacy } from "../master/pharmacy.model";
 import { User } from "../user/user.model";
 import { createNotification } from "../notifications/notification.service";
+import { ROLE_PERMISSIONS, PHARMACY_PERMISSIONS } from "../user/pharmacyRoles";
 
 export const router = Router();
+
+function isExpiringSoonOrExpired(expiryDate: Date): boolean {
+  const d = new Date(expiryDate);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const days = Math.ceil((d.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+  return days < 30; // expiring within 30 days or already expired
+}
 
 // Create pharmacy invoice
 router.post("/", requireAuth, requireRole(["SUPER_ADMIN", "PHARMACY_STAFF"]), async (req: Request, res: Response) => {
@@ -24,6 +33,7 @@ router.post("/", requireAuth, requireRole(["SUPER_ADMIN", "PHARMACY_STAFF"]), as
       paidAmount,
       billDate,
       notes,
+      overrideExpiry,
     } = req.body;
 
     const userId = req.user?.sub;
@@ -96,6 +106,28 @@ router.post("/", requireAuth, requireRole(["SUPER_ADMIN", "PHARMACY_STAFF"]), as
         };
       })
     );
+
+    // Expiry-aware selling: if any item is expiring soon or expired, require manager override
+    const itemsWithExpiryRisk = enrichedItems.filter((item: any) =>
+      isExpiringSoonOrExpired(item.expiryDate)
+    );
+    if (itemsWithExpiryRisk.length > 0) {
+      if (!overrideExpiry) {
+        return res.status(400).json({
+          message: "Some items are expiring within 30 days or are expired. Manager override is required to proceed.",
+          code: "EXPIRY_OVERRIDE_REQUIRED",
+          count: itemsWithExpiryRisk.length,
+        });
+      }
+      const currentUser = await User.findById(userId).select("role pharmacyBranchRole").lean();
+      const branchRole = (currentUser as any)?.pharmacyBranchRole || "PHARMACY_STAFF";
+      const permissions = ROLE_PERMISSIONS[branchRole as keyof typeof ROLE_PERMISSIONS] || [];
+      if (!permissions.includes(PHARMACY_PERMISSIONS.OVERRIDE_EXPIRY_WARNING)) {
+        return res.status(403).json({
+          message: "Only Manager can override expiry warning. You do not have permission.",
+        });
+      }
+    }
 
     // Calculate totals
     const subtotal = enrichedItems.reduce((sum, item) => sum + item.subtotal, 0);

@@ -21,6 +21,7 @@ import patientHistoryRouter from "./patientHistory/patientHistory.routes";
 import doctorRecordRouter from "./doctor/doctorRecord.routes";
 import { router as scheduleRouter } from "./schedule/schedule.routes";
 import { router as mfaRouter } from "./user/mfa.routes";
+import { router as otpRouter } from "./user/otp.routes";
 import { router as transcriptionRouter } from "./transcription/transcription.routes";
 import { router as invoiceRouter } from "./invoice/invoice.routes";
 import { router as pharmacyInvoiceRouter } from "./invoice/pharmacyInvoice.routes";
@@ -55,9 +56,12 @@ export function registerRoutes(app: Express) {
   // Protected API routes (authentication required)
   app.use("/api/users", userRouter);
   app.use("/api/users/mfa", mfaRouter);
+  app.use("/api/users/otp", otpRouter);
   app.use("/api/transcription", transcriptionRouter);
   app.use("/api/appointments", appointmentRouter);
   app.use("/api/prescriptions", prescriptionRouter);
+  // Mount inventory search routes FIRST so /search, /brands-by-composition, /expiry-risk are matched before /:id
+  app.use("/api/inventory", inventorySearchRouter);
   app.use("/api/inventory", inventoryRouter);
   app.use("/api/distributor-orders", distributorOrderRouter);
   app.use("/api/finance", financeRouter);
@@ -78,7 +82,6 @@ export function registerRoutes(app: Express) {
   app.use("/api/invoices", invoiceRouter);
   app.use("/api/pharmacy-invoices", pharmacyInvoiceRouter);
   app.use("/api/audits", auditRouter);
-  app.use("/api/inventory", inventorySearchRouter); // Search routes added to inventory
   app.use("/api/reports/pharmacy", pharmacyReportsRouter);
 
   app.get("/api/health", (_req, res) => {

@@ -18,6 +18,37 @@ const httpServer = createServer(app);
 
 app.set('etag', false);
 
+// CORS first so preflight (OPTIONS) always gets headers before any other middleware
+const allowedOrigins: string[] = [
+  "http://localhost:3000",
+  "http://localhost:3001",
+  "http://localhost:3002",
+  "http://127.0.0.1:3000",
+  "http://127.0.0.1:3001",
+  "http://127.0.0.1:3002",
+];
+if (process.env.CORS_ORIGIN) {
+  process.env.CORS_ORIGIN.split(",").forEach((o) => {
+    const t = o.trim();
+    if (t) allowedOrigins.push(t);
+  });
+}
+const corsOptions = {
+  origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.includes(origin)) return callback(null, true);
+    if (process.env.NODE_ENV !== "production") return callback(null, true);
+    callback(null, false);
+  },
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "Accept"],
+  optionsSuccessStatus: 204,
+};
+app.use(cors(corsOptions));
+// Explicit preflight: respond to OPTIONS with 204 and CORS headers so browser always gets them
+app.options("*", cors(corsOptions));
+
 app.use((req, res, next) => {
   res.set({
     'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
@@ -27,13 +58,6 @@ app.use((req, res, next) => {
   });
   next();
 });
-
-app.use(cors({
-  origin: true,
-  credentials: true,
-  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
-}));
 app.use(cookieParser());
 app.use(express.json());
 app.use(morgan("dev"));

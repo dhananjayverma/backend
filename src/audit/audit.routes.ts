@@ -304,6 +304,56 @@ router.get("/", requireAuth, async (req: Request, res: Response) => {
   }
 });
 
+// Export audit report (CSV download)
+router.get("/:id/export", requireAuth, requireRole(["SUPER_ADMIN", "PHARMACY_STAFF"]), async (req: Request, res: Response) => {
+  try {
+    const { format = "csv" } = req.query;
+    const audit = await StockAudit.findById(req.params.id);
+    if (!audit) {
+      return res.status(404).json({ message: "Audit not found" });
+    }
+
+    if (format === "csv") {
+      const headers = [
+        "Medicine Name",
+        "Composition",
+        "Brand",
+        "Batch",
+        "Opening Stock",
+        "System Sales",
+        "Manual Bills",
+        "Total Sales",
+        "Expected Closing",
+        "Actual Closing",
+        "Variance",
+        "Variance Reason",
+      ];
+      const rows = audit.items.map((item) => [
+        item.medicineName,
+        item.composition,
+        item.brandName || "",
+        item.batchNumber,
+        item.openingStock,
+        item.systemSales,
+        item.manualBills,
+        item.totalSales,
+        item.expectedClosingStock,
+        item.actualClosingStock ?? "",
+        item.variance ?? "",
+        item.varianceReason ?? "",
+      ]);
+      const csv = [headers.join(","), ...rows.map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(","))].join("\r\n");
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader("Content-Disposition", `attachment; filename="audit-${new Date(audit.auditDate).toISOString().split("T")[0]}-${audit._id}.csv"`);
+      return res.send("\uFEFF" + csv); // BOM for Excel
+    }
+
+    res.status(400).json({ message: "Unsupported format. Use format=csv" });
+  } catch (error: any) {
+    res.status(400).json({ message: error.message });
+  }
+});
+
 // Review audit (mark as reviewed)
 router.patch("/:id/review", requireAuth, requireRole(["SUPER_ADMIN", "PHARMACY_MANAGER"]), async (req: Request, res: Response) => {
   try {

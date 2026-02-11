@@ -9,6 +9,9 @@ export type UserRole =
   | "PATIENT"
   | "DELIVERY_AGENT";
 
+/** Role within a pharmacy branch (for multi-login per branch) */
+export type PharmacyBranchRole = "PHARMACY_MANAGER" | "PHARMACY_CASHIER" | "PHARMACY_STAFF";
+
 export interface IUser extends Document {
   name: string;
   email: string;
@@ -21,6 +24,8 @@ export interface IUser extends Document {
   status?: "AVAILABLE" | "BUSY" | "OFFLINE";
   currentOrderId?: string;
   isActive: boolean;
+  /** Role within pharmacy branch (Manager, Cashier, Staff) for permission checks */
+  pharmacyBranchRole?: PharmacyBranchRole;
   // Doctor-specific fields
   specialization?: string;
   qualification?: string;
@@ -54,6 +59,11 @@ const UserSchema = new Schema<IUser>(
     },
     currentOrderId: { type: String },
     isActive: { type: Boolean, default: true },
+    pharmacyBranchRole: {
+      type: String,
+      enum: ["PHARMACY_MANAGER", "PHARMACY_CASHIER", "PHARMACY_STAFF"],
+      default: "PHARMACY_STAFF",
+    },
     // Doctor-specific fields
     specialization: { type: String },
     qualification: { type: String },

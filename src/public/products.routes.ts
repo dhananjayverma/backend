@@ -175,6 +175,101 @@ router.get("/", async (req: Request, res: Response) => {
 });
 
 /**
+ * Get medicines by composition or brand - for patient app
+ * Returns compositions with available brands and pharmacy availability
+ * Query: search (composition or brand name), latitude, longitude, radius, prescribedBrand (optional - restrict to this brand if from prescription)
+ */
+router.get("/by-composition", async (req: Request, res: Response) => {
+  try {
+    const { search, latitude, longitude, radius = 10, prescribedBrand } = req.query;
+    if (!search || String(search).trim().length < 2) {
+      return res.json({ compositions: [], query: search });
+    }
+    const q = String(search).trim();
+    const filter: any = {
+      quantity: { $gt: 0 },
+      $or: [
+        { composition: { $regex: q, $options: "i" } },
+        { medicineName: { $regex: q, $options: "i" } },
+        { brandName: { $regex: q, $options: "i" } },
+      ],
+    };
+    let pharmacyIds: string[] = [];
+    if (latitude && longitude) {
+      const pharmacies = await Pharmacy.find({
+        isActive: true,
+        latitude: { $exists: true },
+        longitude: { $exists: true },
+      }).lean();
+      const nearby = pharmacies.filter((pharmacy: any) => {
+        if (!pharmacy.latitude || !pharmacy.longitude) return false;
+        const distance = calculateDistance(
+          Number(latitude),
+          Number(longitude),
+          pharmacy.latitude,
+          pharmacy.longitude
+        );
+        return distance <= Number(radius);
+      });
+      pharmacyIds = nearby.map((p: any) => String(p._id));
+      if (pharmacyIds.length > 0) filter.pharmacyId = { $in: pharmacyIds };
+    }
+    const items = await InventoryItem.find(filter)
+      .sort({ expiryDate: 1 })
+      .limit(200)
+      .lean();
+    const today = new Date();
+    const validItems = items.filter((item: any) => new Date(item.expiryDate) >= today);
+    const pharmacyIdsUsed = [...new Set(validItems.map((item: any) => item.pharmacyId).filter(Boolean))];
+    const pharmacies = await Pharmacy.find({ _id: { $in: pharmacyIdsUsed }, isActive: true }).lean();
+    const pharmacyMap: Record<string, any> = {};
+    pharmacies.forEach((pharmacy: any) => {
+      const id = String(pharmacy._id);
+      pharmacyMap[id] = {
+        _id: id,
+        name: pharmacy.name,
+        address: pharmacy.address,
+        phone: pharmacy.phone,
+        distance: latitude && longitude && pharmacy.latitude && pharmacy.longitude
+          ? calculateDistance(Number(latitude), Number(longitude), pharmacy.latitude, pharmacy.longitude)
+          : null,
+      };
+    });
+    const byComposition = new Map<string, any>();
+    for (const item of validItems) {
+      const comp = item.composition || item.medicineName;
+      if (prescribedBrand && item.brandName && !String(item.brandName).toLowerCase().includes(String(prescribedBrand).toLowerCase())) {
+        continue; // Prescription mandates specific brand - only include that brand
+      }
+      if (!byComposition.has(comp)) {
+        byComposition.set(comp, { composition: comp, medicineName: item.medicineName, brands: [] });
+      }
+      const entry = byComposition.get(comp);
+      const brandKey = `${item.brandName || "Generic"}|${item.batchNumber}`;
+      const existing = entry.brands.find((b: any) => b.inventoryItemId === String(item._id));
+      if (!existing) {
+        const daysUntilExpiry = Math.ceil((new Date(item.expiryDate).getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+        entry.brands.push({
+          inventoryItemId: String(item._id),
+          brandName: item.brandName || "Generic",
+          batchNumber: item.batchNumber,
+          expiryDate: item.expiryDate,
+          daysUntilExpiry,
+          availableQuantity: item.quantity,
+          sellingPrice: item.sellingPrice,
+          mrp: item.mrp || item.sellingPrice,
+          pharmacy: item.pharmacyId ? pharmacyMap[String(item.pharmacyId)] : null,
+        });
+      }
+    }
+    const compositions = Array.from(byComposition.values());
+    res.json({ compositions, query: search });
+  } catch (error: any) {
+    res.status(400).json({ message: error.message });
+  }
+});
+
+/**
  * Get product by ID
  */
 router.get("/:id", async (req: Request, res: Response) => {

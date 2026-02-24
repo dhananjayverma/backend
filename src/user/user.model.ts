@@ -30,6 +30,15 @@ export interface IUser extends Document {
   specialization?: string;
   qualification?: string;
   serviceCharge?: number;
+  maxPatientsPerDay?: number;
+  // Patient-specific fields (reception / walk-in)
+  age?: number;
+  dob?: Date;
+  gender?: string;
+  bloodGroup?: string;
+  opdNumber?: string;
+  aadhaar?: string;
+  address?: string;
   // MFA fields
   mfaEnabled?: boolean;
   mfaSecret?: string; // TOTP secret for 2FA
@@ -68,6 +77,15 @@ const UserSchema = new Schema<IUser>(
     specialization: { type: String },
     qualification: { type: String },
     serviceCharge: { type: Number },
+    maxPatientsPerDay: { type: Number },
+    // Patient-specific fields (reception / walk-in)
+    age: { type: Number },
+    dob: { type: Date },
+    gender: { type: String },
+    bloodGroup: { type: String },
+    opdNumber: { type: String },
+    aadhaar: { type: String },
+    address: { type: String },
     // MFA fields
     mfaEnabled: { type: Boolean, default: false },
     mfaSecret: { type: String },

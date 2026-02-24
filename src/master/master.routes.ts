@@ -129,8 +129,8 @@ router.get(
           console.log("Distributor user has no distributorId, returning empty array");
           return res.json([]);
         }
-      } else if (userRole === "SUPER_ADMIN" || userRole === "HOSPITAL_ADMIN") {
-        // For admins, allow filtering by distributorId query parameter
+      } else if (userRole === "SUPER_ADMIN" || userRole === "HOSPITAL_ADMIN" || userRole === "RECEPTIONIST") {
+        // For admins and reception, allow filtering by distributorId query parameter
         if (distributorId) {
           filter.distributorId = distributorId;
         }

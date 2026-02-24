@@ -1,6 +1,13 @@
 import mongoose, { Schema, Document, Model } from "mongoose";
 
-export type AppointmentStatus = "PENDING" | "CONFIRMED" | "COMPLETED" | "CANCELLED";
+export type AppointmentStatus =
+  | "PENDING"
+  | "SCHEDULED"
+  | "CONFIRMED"
+  | "CHECKED_IN"
+  | "IN_PROGRESS"
+  | "COMPLETED"
+  | "CANCELLED";
 export type AppointmentChannel = "PHYSICAL" | "VIDEO";
 
 export interface IAppointment extends Document {
@@ -20,6 +27,10 @@ export interface IAppointment extends Document {
   slotId?: string; // Reference to the slot that was booked
   cancellationReason?: string; // Reason provided when cancelled by doctor
   rescheduleReason?: string; // Reason provided when rescheduled by doctor
+  tokenNumber?: number; // Queue token (reception)
+  appointmentType?: string; // e.g. WALK_IN, FOLLOW_UP, EMERGENCY
+  isEmergency?: boolean;
+  appointmentDate?: Date; // Alias for scheduledAt for aggregation
 }
 
 const AppointmentSchema = new Schema<IAppointment>(
@@ -30,7 +41,7 @@ const AppointmentSchema = new Schema<IAppointment>(
     scheduledAt: { type: Date, required: true },
     status: {
       type: String,
-      enum: ["PENDING", "CONFIRMED", "COMPLETED", "CANCELLED"],
+      enum: ["PENDING", "SCHEDULED", "CONFIRMED", "CHECKED_IN", "IN_PROGRESS", "COMPLETED", "CANCELLED"],
       default: "PENDING",
       index: true,
     },
@@ -49,6 +60,10 @@ const AppointmentSchema = new Schema<IAppointment>(
     slotId: { type: String },
     cancellationReason: { type: String },
     rescheduleReason: { type: String },
+    tokenNumber: { type: Number },
+    appointmentType: { type: String },
+    isEmergency: { type: Boolean, default: false },
+    appointmentDate: { type: Date },
   },
   { timestamps: true }
 );

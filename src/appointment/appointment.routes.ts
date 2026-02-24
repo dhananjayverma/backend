@@ -413,12 +413,32 @@ router.get("/:id", async (req: Request, res: Response) => {
   }
 });
 
-// Update status (Doctor & Admin)
+// Update appointment (reception calls PATCH /:id with { status })
+router.patch("/:id", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const { status } = req.body;
+    if (status === undefined || typeof status !== "string") {
+      return res.status(400).json({ message: "Send { status } to update appointment status" });
+    }
+    const validStatuses = ["PENDING", "SCHEDULED", "CONFIRMED", "CHECKED_IN", "IN_PROGRESS", "COMPLETED", "CANCELLED"];
+    if (!validStatuses.includes(status)) {
+      return res.status(400).json({ message: `Invalid status. Must be one of: ${validStatuses.join(", ")}` });
+    }
+    const appointment = await Appointment.findById(req.params.id) as IAppointment | null;
+    if (!appointment) return res.status(404).json({ message: "Appointment not found" });
+    const updated = await Appointment.findByIdAndUpdate(req.params.id, { status }, { new: true });
+    return res.json(updated);
+  } catch (error: any) {
+    return res.status(400).json({ message: error.message || "Failed to update status" });
+  }
+});
+
+// Update status (Doctor & Admin & Reception) — full flow with notifications/sockets
 router.patch("/:id/status", requireAuth, validateRequired(["status"]), async (req: Request, res: Response) => {
   try {
   const { status } = req.body;
   
-  const validStatuses = ["PENDING", "CONFIRMED", "COMPLETED", "CANCELLED"];
+  const validStatuses = ["PENDING", "SCHEDULED", "CONFIRMED", "CHECKED_IN", "IN_PROGRESS", "COMPLETED", "CANCELLED"];
   if (!validStatuses.includes(status)) {
     throw new AppError(`Invalid status. Must be one of: ${validStatuses.join(", ")}`, 400);
   }

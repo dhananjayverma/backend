@@ -7,7 +7,9 @@ export type UserRole =
   | "PHARMACY_STAFF"
   | "DISTRIBUTOR"
   | "PATIENT"
-  | "DELIVERY_AGENT";
+  | "DELIVERY_AGENT"
+  | "RECEPTIONIST"
+  | "NURSE";
 
 /** Role within a pharmacy branch (for multi-login per branch) */
 export type PharmacyBranchRole = "PHARMACY_MANAGER" | "PHARMACY_CASHIER" | "PHARMACY_STAFF";
@@ -39,6 +41,9 @@ export interface IUser extends Document {
   opdNumber?: string;
   aadhaar?: string;
   address?: string;
+  // Nurse-specific fields
+  department?: string;
+  shiftEligibility?: "DAY" | "NIGHT" | "BOTH";
   // MFA fields
   mfaEnabled?: boolean;
   mfaSecret?: string; // TOTP secret for 2FA
@@ -55,7 +60,7 @@ const UserSchema = new Schema<IUser>(
     passwordHash: { type: String, required: true },
     role: {
       type: String,
-      enum: ["SUPER_ADMIN", "HOSPITAL_ADMIN", "DOCTOR", "PHARMACY_STAFF", "DISTRIBUTOR", "PATIENT", "DELIVERY_AGENT"],
+      enum: ["SUPER_ADMIN", "HOSPITAL_ADMIN", "DOCTOR", "PHARMACY_STAFF", "DISTRIBUTOR", "PATIENT", "DELIVERY_AGENT", "RECEPTIONIST", "NURSE"],
       required: true,
     },
     hospitalId: { type: String },
@@ -86,6 +91,9 @@ const UserSchema = new Schema<IUser>(
     opdNumber: { type: String },
     aadhaar: { type: String },
     address: { type: String },
+    // Nurse-specific fields
+    department: { type: String },
+    shiftEligibility: { type: String, enum: ["DAY", "NIGHT", "BOTH"] },
     // MFA fields
     mfaEnabled: { type: Boolean, default: false },
     mfaSecret: { type: String },

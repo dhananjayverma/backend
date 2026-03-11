@@ -34,7 +34,8 @@ router.post(
 // Basic signup for initial testing (Super Admin can later create all users)
 router.post("/signup", async (req, res) => {
   try {
-    const { name, email, password, role, hospitalId, pharmacyId, distributorId, phone, specialization, qualification, serviceCharge } = req.body;
+    const { name, email, password, role, hospitalId, pharmacyId, distributorId, phone, specialization, qualification, serviceCharge,
+            age, dob, gender, bloodGroup, aadhaar, address, opdNumber, department, shiftEligibility } = req.body;
 
     // Validate required fields
     if (!name || !email || !password || !role) {
@@ -60,13 +61,26 @@ router.post("/signup", async (req, res) => {
     if (hospitalId) userData.hospitalId = hospitalId;
     if (pharmacyId) userData.pharmacyId = pharmacyId;
     if (distributorId) userData.distributorId = distributorId;
-    
+
     // Doctor-specific fields
     if (specialization) userData.specialization = specialization;
     if (qualification) userData.qualification = qualification;
     if (serviceCharge !== undefined && serviceCharge !== null && serviceCharge !== "") {
       userData.serviceCharge = parseFloat(serviceCharge);
     }
+
+    // Patient-specific fields
+    if (age !== undefined && age !== null && age !== "") userData.age = parseInt(age, 10);
+    if (dob) userData.dob = new Date(dob);
+    if (gender) userData.gender = gender;
+    if (bloodGroup) userData.bloodGroup = bloodGroup;
+    if (aadhaar) userData.aadhaar = aadhaar;
+    if (address) userData.address = address;
+    if (opdNumber) userData.opdNumber = opdNumber;
+
+    // Nurse-specific fields
+    if (department) userData.department = department;
+    if (shiftEligibility) userData.shiftEligibility = shiftEligibility;
 
     const user = await User.create(userData);
 
@@ -108,6 +122,17 @@ router.post("/signup", async (req, res) => {
     if (user.specialization) userResponse.specialization = user.specialization;
     if (user.qualification) userResponse.qualification = user.qualification;
     if (user.serviceCharge !== undefined) userResponse.serviceCharge = user.serviceCharge;
+    // Patient fields
+    if (user.age !== undefined) userResponse.age = user.age;
+    if (user.dob) userResponse.dob = user.dob;
+    if (user.gender) userResponse.gender = user.gender;
+    if (user.bloodGroup) userResponse.bloodGroup = user.bloodGroup;
+    if (user.aadhaar) userResponse.aadhaar = user.aadhaar;
+    if (user.address) userResponse.address = user.address;
+    if (user.opdNumber) userResponse.opdNumber = user.opdNumber;
+    // Nurse fields
+    if (user.department) userResponse.department = user.department;
+    if (user.shiftEligibility) userResponse.shiftEligibility = user.shiftEligibility;
 
     res.status(201).json(userResponse);
   } catch (error: any) {
@@ -315,6 +340,17 @@ router.get(
         specialization: user.specialization || undefined,
         qualification: user.qualification || undefined,
         serviceCharge: user.serviceCharge !== undefined ? user.serviceCharge : undefined,
+        // Patient-specific fields
+        age: user.age !== undefined ? user.age : undefined,
+        dob: user.dob || undefined,
+        gender: user.gender || undefined,
+        bloodGroup: user.bloodGroup || undefined,
+        aadhaar: user.aadhaar || undefined,
+        address: user.address || undefined,
+        opdNumber: user.opdNumber || undefined,
+        // Nurse-specific fields
+        department: user.department || undefined,
+        shiftEligibility: user.shiftEligibility || undefined,
         createdAt: user.createdAt,
         updatedAt: user.updatedAt,
       }));
@@ -457,7 +493,8 @@ router.patch(
         return res.status(400).json({ message: "Invalid user ID" });
       }
 
-      const { name, email, phone, role, hospitalId, pharmacyId, distributorId, isActive, password, status, currentOrderId, specialization, qualification, serviceCharge, pharmacyBranchRole } = req.body;
+      const { name, email, phone, role, hospitalId, pharmacyId, distributorId, isActive, password, status, currentOrderId, specialization, qualification, serviceCharge, pharmacyBranchRole,
+              age, dob, gender, bloodGroup, aadhaar, address, opdNumber, department, shiftEligibility } = req.body;
       const userRole = req.user?.role;
       const isAdmin = userRole === "SUPER_ADMIN" || userRole === "HOSPITAL_ADMIN";
       const isDistributor = userRole === "DISTRIBUTOR";
@@ -505,6 +542,29 @@ router.patch(
             ? pharmacyBranchRole
             : "PHARMACY_STAFF";
         }
+        // Patient-specific fields
+        if (age !== undefined && age !== null && age !== "") update.age = parseInt(age, 10);
+        if (dob !== undefined) update.dob = dob ? new Date(dob) : undefined;
+        if (gender !== undefined) update.gender = gender === "" ? undefined : gender;
+        if (bloodGroup !== undefined) update.bloodGroup = bloodGroup === "" ? undefined : bloodGroup;
+        if (aadhaar !== undefined) update.aadhaar = aadhaar === "" ? undefined : aadhaar;
+        if (address !== undefined) update.address = address === "" ? undefined : address;
+        if (opdNumber !== undefined) update.opdNumber = opdNumber === "" ? undefined : opdNumber;
+        // Nurse-specific fields
+        if (department !== undefined) update.department = department === "" ? undefined : department;
+        if (shiftEligibility !== undefined) update.shiftEligibility = shiftEligibility === "" ? undefined : shiftEligibility;
+      }
+      // Receptionist can update patient-specific fields only (age, gender, bloodGroup, address)
+      else if (req.user?.role === "RECEPTIONIST") {
+        if (targetUser.role !== "PATIENT") {
+          return res.status(403).json({ message: "Receptionists can only update patient records" });
+        }
+        if (age !== undefined && age !== null && age !== "") update.age = parseInt(age, 10);
+        if (gender !== undefined) update.gender = gender === "" ? undefined : gender;
+        if (bloodGroup !== undefined) update.bloodGroup = bloodGroup === "" ? undefined : bloodGroup;
+        if (address !== undefined) update.address = address === "" ? undefined : address;
+        if (phone !== undefined) update.phone = phone;
+        if (name !== undefined) update.name = name;
       }
       // Distributors can update delivery agent status and currentOrderId
       else if (isDistributor) {

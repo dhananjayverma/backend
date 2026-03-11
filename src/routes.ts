@@ -31,6 +31,19 @@ import { router as pharmacyReportsRouter } from "./reports/pharmacyReports.route
 import { router as medicineSearchRouter } from "./public/medicineSearch.routes";
 import { router as productsRouter } from "./public/products.routes";
 import { router as uploadRouter } from "./public/upload.routes";
+import { router as infrastructureRouter } from "./infrastructure/infrastructure.routes";
+import { router as ipAdmissionRouter } from "./patient/ipAdmission.routes";
+import { router as opRegistrationRouter } from "./patient/opRegistration.routes";
+import { router as serviceRegistrationRouter } from "./patient/serviceRegistration.routes";
+import { router as billingRouter } from "./billing/billing.routes";
+import { router as dischargeRouter } from "./discharge/discharge.routes";
+import { router as nurseRouter } from "./nurse/nurse.routes";
+import { router as hospitalServicesRouter } from "./hospitalServices/hospitalServices.routes";
+import { router as certificateRouter } from "./certificates/certificate.routes";
+import { router as hospitalReportsRouter } from "./reports/hospitalReports.routes";
+import { router as vitalsRouter } from "./vitals/vitals.routes";
+import { router as medicationRouter } from "./medications/medication.routes";
+import { router as nurseAlertRouter } from "./nurseAlerts/nurseAlert.routes";
 
 export function registerRoutes(app: Express) {
   // Root route - API information
@@ -83,6 +96,21 @@ export function registerRoutes(app: Express) {
   app.use("/api/pharmacy-invoices", pharmacyInvoiceRouter);
   app.use("/api/audits", auditRouter);
   app.use("/api/reports/pharmacy", pharmacyReportsRouter);
+
+  // New HSP Extension routes
+  app.use("/api/infrastructure", infrastructureRouter);
+  app.use("/api/ip-admissions", ipAdmissionRouter);
+  app.use("/api/op-registrations", opRegistrationRouter);
+  app.use("/api/service-registrations", serviceRegistrationRouter);
+  app.use("/api/bills", billingRouter);
+  app.use("/api/discharges", dischargeRouter);
+  app.use("/api/nurse", nurseRouter);
+  app.use("/api/hospital-services", hospitalServicesRouter);
+  app.use("/api/certificates", certificateRouter);
+  app.use("/api/reports/hospital", hospitalReportsRouter);
+  app.use("/api/vitals", vitalsRouter);
+  app.use("/api/medications", medicationRouter);
+  app.use("/api/nurse/alerts", nurseAlertRouter);
 
   app.get("/api/health", (_req, res) => {
     res.json({ status: "ok" });
